@@ -389,8 +389,8 @@ if __name__ == '__main__':
             self.loss_fn = nn.CrossEntropyLoss()
             self.stime = None
 
-        def train_dataloader(self):
-            return DataLoader(train_ds, batch_size=batch_size_train, shuffle=True)
+        # def train_dataloader(self):
+            # return DataLoader(train_ds, batch_size=batch_size_train, shuffle=True)
             # return DataLoader(test_ds, batch_size=batch_size_test, shuffle=True)
 
         def training_step(self, batch, batch_idx):
@@ -404,6 +404,13 @@ if __name__ == '__main__':
 
         # def test_step(self, batch, batch_idx):
             # return
+
+        def validation_step(self, batch, batch_idx):
+            inpts, trgts = batch
+            outpts = model(inpts)
+            
+            accuracy = comp_next_token_pred_acc(outpts, trgts)
+            print("batch_idx {} validataion: Masked prediction accuracy {:.4f}%".format(batch_idx, accuracy*100.0))
 
         def on_train_batch_start(self, batch, batch_idx):
             stime = time.time()
@@ -419,6 +426,7 @@ if __name__ == '__main__':
         # os.makedirs(model_state_dir, exist_ok=True)
         # torch.save(model.state_dict(), model_state_path)
 
+    # torch.set_float32_matmul_precision('medium')
     train_ds, test_ds = get_T2T_datasets()
 
     tokenizer = CharacterTokenizer(
@@ -430,8 +438,8 @@ if __name__ == '__main__':
     train_ds.config(tokenizer, seq_len)
     test_ds.config(tokenizer, seq_len)
 
-    train_dataloader = DataLoader(train_ds, batch_size=batch_size_train, shuffle=True, num_workers=40)
-    test_dataloader = DataLoader(test_ds, batch_size=batch_size_test, shuffle=True, num_workers=40)
+    train_dataloader = DataLoader(train_ds, batch_size=batch_size_train, shuffle=True)
+    test_dataloader = DataLoader(test_ds, batch_size=batch_size_test, shuffle=True)
 
     print("Not implemented: Model load/store")
     model = MambaDNA(vocab_size=tokenizer.vocab_size, embed_dim=embed_dim,
@@ -441,9 +449,5 @@ if __name__ == '__main__':
 
     mambaDNA = LitMambaDNA(model)
 
-    # trainer = L.Trainer(limit_train_batches=100, max_epochs=1, devices=2, accelerator="gpu", log_every_n_steps=50, profiler='simple', strategy="ddp_notebook")
-    # trainer = L.Trainer(limit_train_batches=10, max_epochs=1, devices=2, accelerator="gpu", log_every_n_steps=50, strategy="ddp_fork")
-    #trainer = L.Trainer(limit_train_batches=10, max_epochs=1, devices=-1, accelerator="gpu", log_every_n_steps=50, strategy="ddp")
-    trainer = L.Trainer(limit_train_batches=10, max_epochs=1, devices=1, accelerator="gpu", log_every_n_steps=50)
-    #trainer.fit(model=mambaDNA, train_dataloaders=test_dataloader)
-    trainer.fit(model=mambaDNA)
+    trainer = L.Trainer(limit_train_batches=2, max_epochs=4, limit_val_batches=1, devices=2, accelerator="gpu", log_every_n_steps=50, strategy="ddp", profiler='simple')
+    trainer.fit(mambaDNA, train_dataloader, test_dataloader)
