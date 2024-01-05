@@ -4,6 +4,7 @@ import requests
 import os
 from pathlib import Path
 import time
+import random
 
 import torch
 import torch.nn as nn
@@ -179,6 +180,14 @@ if __name__ == '__main__':
             return cls.from_config(cfg)
 
 
+    def create_genome_tokenizer():
+        tokenizer = CharacterTokenizer(
+            characters=['A', 'C', 'G', 'T', 'N'],
+            model_max_length=seq_len,
+            add_special_tokens=False,
+            padding_side='left',
+        )
+        return tokenizer
 
 
     def complement(in_seq):
@@ -201,8 +210,16 @@ if __name__ == '__main__':
         return out_seq
         
 
-    class GenomeDataset(torch.utils.data.Dataset):
-        def __init__(self, fasta_path, ds_entries):
+    class GenomeIterator:
+        T2T_path = "dataset/ncbi_dataset/data/GCF_009914755.1/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna"
+        training_entries = ['NC_060925.1', 'NC_060926.1', 'NC_060927.1', 'NC_060928.1', 'NC_060929.1',
+                            'NC_060931.1', 'NC_060932.1', 'NC_060933.1', 'NC_060934.1', 'NC_060935.1',
+                            'NC_060936.1', 'NC_060937.1', 'NC_060938.1', 'NC_060939.1', 'NC_060941.1',
+                            'NC_060942.1', 'NC_060943.1', 'NC_060944.1', 'NC_060945.1', 'NC_060946.1',
+                            'NC_060947.1', 'NC_060948.1']
+        test_entries = ['NC_060930.1', 'NC_060940.1']
+
+        def __init__(self, fasta_path, ds_entries, rnd_seed=0):
             assert Path(fasta_path).exists
             self.fasta = Fasta(fasta_path, one_based_attributes=False)
 
@@ -221,17 +238,36 @@ if __name__ == '__main__':
             # for e in self.entry_ranges:
             #     print(e)
 
+            # first range forward idices, second range reverse complement
+            self.len = self.entry_ranges[-1]['end'] * 2
+
+            self.rnd_seed = rnd_seed
+            self.rnd_gen = random.Random(self.rnd_seed)
+
+            self.tokenizer = None
+            self.seq_len = None
+
         def config(self, tokenizer, seq_len):
             self.tokenizer = tokenizer
             self.seq_len = seq_len
-                 
-        def __len__(self):
-            # first range forward idices, second range reverse complement
-            return self.entry_ranges[-1]['end'] * 2
 
-        def __getitem__(self, idx):
+        def reseed(self):
+            world_size = torch.distributed.get_world_size()
+            if world_size < 1:
+                world_size = 1
+            self.rnd_seed = self.rnd_seed + world_size
+            self.rnd_gen = random.Random(self.rnd_seed)
+
+        def __next__(self):
+            assert self.tokenizer != None, "Tokenizer need to be set; run config() before usage"
+            assert self.seq_len != None, "Sequence length need to be set; run config before usage"
+
+            rnd_idx = self.rnd_gen.randint(0, self.len - 1)
+            return self.get_seq(rnd_idx)
+
+        def get_seq(self, idx):
             assert idx >= 0
-            assert idx < self.__len__()
+            assert idx < self.len
 
             # return reverse complement?
             rev_compl = (idx >= self.entry_ranges[-1]['end'])
@@ -247,12 +283,9 @@ if __name__ == '__main__':
 
             assert key != None
             assert local_idx != -1
-            # print("local_idx: {}, rev_compl: {}".format(local_idx, rev_compl))
 
             left_bound = 0
             right_bound = len(self.fasta[key])
-
-            # print(self.fasta[key][-20:], len(self.fasta[key][-20:]))
 
             seq = None
             if not(rev_compl):
@@ -263,7 +296,6 @@ if __name__ == '__main__':
 
             # capitalize all nucleotides
             seq_str = str(seq).upper()
-            # print("seq_str: {}".format(seq_str))
 
             # use complement when reverse
             if rev_compl:
@@ -273,32 +305,25 @@ if __name__ == '__main__':
 
             tokens = self.tokenizer(seq_str, add_special_tokens=False, padding="max_length",
                                     max_length=self.seq_len, truncation=True)
-            input = torch.LongTensor(tokens["input_ids"]).clone()
-            # print("input: {}".format(input))
+            inpt = torch.LongTensor(tokens["input_ids"]).clone()
 
             # mask
-            target = input.clone()
-            input[-1] = self.tokenizer._vocab_str_to_int['[MASK]']
-            # print(input, target)
-            return input, target
+            target = inpt.clone()
+            inpt[-1] = self.tokenizer._vocab_str_to_int['[MASK]']
+            return inpt, target
 
-    def get_T2T_datasets():
-        T2T_path = "dataset/ncbi_dataset/data/GCF_009914755.1/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna"
-        training_entries = ['NC_060925.1', 'NC_060926.1', 'NC_060927.1', 'NC_060928.1', 'NC_060929.1',
-                            'NC_060931.1', 'NC_060932.1', 'NC_060933.1', 'NC_060934.1', 'NC_060935.1',
-                            'NC_060936.1', 'NC_060937.1', 'NC_060938.1', 'NC_060939.1', 'NC_060941.1',
-                            'NC_060942.1', 'NC_060943.1', 'NC_060944.1', 'NC_060945.1', 'NC_060946.1',
-                            'NC_060947.1', 'NC_060948.1']
-        test_entries = ['NC_060930.1', 'NC_060940.1']
 
-        # check training and test dataset do not contain the same entries
-        assert set(training_entries).isdisjoint(set(test_entries)) == True
-        
-        train_dataset = GenomeDataset(T2T_path, training_entries)
-        test_dataset = GenomeDataset(T2T_path, test_entries)
-        return train_dataset, test_dataset
+    class GenomeDataset(torch.utils.data.IterableDataset):
+        def __init__(self, genomeIterator):
+            super().__init__()
+            self.genomeIterator = genomeIterator
 
-    # train_ds, test_ds = get_T2T_datasets()
+        def config(self, tokenizer, seq_len):
+            self.genomeIterator.config(tokenizer, seq_len)
+
+        def __iter__(self):
+            self.genomeIterator.reseed()
+            return self.genomeIterator
 
 
     # code from https://github.com/apapiu/mamba_small_bench
@@ -341,8 +366,6 @@ if __name__ == '__main__':
             x = self.tower(self.embed(x))
             return self.out_proj(x)
 
-
-    # %env CUDA_VISIBLE_DEVICES=6,7
 
     # assert torch.cuda.is_available() == True, "CUDA unavailable"
     # device = torch.device('cuda')
@@ -389,13 +412,19 @@ if __name__ == '__main__':
             self.loss_fn = nn.CrossEntropyLoss()
             self.stime = None
 
-        # def train_dataloader(self):
-            # return DataLoader(train_ds, batch_size=batch_size_train, shuffle=True)
-            # return DataLoader(test_ds, batch_size=batch_size_test, shuffle=True)
+        def train_dataloader(self):
+            seed = torch.distributed.get_rank()
+            train_iter = GenomeIterator(GenomeIterator.T2T_path, GenomeIterator.training_entries, seed)
+            train_ds = GenomeDataset(train_iter)
+
+            tokenizer = create_genome_tokenizer()
+            train_ds.config(tokenizer, seq_len)
+            return DataLoader(train_ds, batch_size=batch_size_train)
 
         def training_step(self, batch, batch_idx):
             inpts, trgts = batch
             outpts = model(inpts)
+            print("inpts: {}, trgts: {}, outpts: {}".format(inpts.size(), trgts.size(), outpts.size()))
             loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
             
             accuracy = comp_next_token_pred_acc(outpts, trgts)
@@ -423,31 +452,18 @@ if __name__ == '__main__':
                                           weight_decay=weight_decay) #eps=epsilon, 
             return optimizer
         
-        # os.makedirs(model_state_dir, exist_ok=True)
-        # torch.save(model.state_dict(), model_state_path)
-
-    # torch.set_float32_matmul_precision('medium')
-    train_ds, test_ds = get_T2T_datasets()
-
-    tokenizer = CharacterTokenizer(
-        characters=['A', 'C', 'G', 'T', 'N'],
-        model_max_length=seq_len,
-        add_special_tokens=False,
-        padding_side='left',
-    )
-    train_ds.config(tokenizer, seq_len)
-    test_ds.config(tokenizer, seq_len)
-
-    train_dataloader = DataLoader(train_ds, batch_size=batch_size_train, shuffle=True)
-    test_dataloader = DataLoader(test_ds, batch_size=batch_size_test, shuffle=True)
 
     print("Not implemented: Model load/store")
+    tokenizer = create_genome_tokenizer()
     model = MambaDNA(vocab_size=tokenizer.vocab_size, embed_dim=embed_dim,
                      seq_len=seq_len, n_layers=n_layers, dropout=dropout)
+    # dummy model
+    #model = nn.Sequential(nn.Embedding(tokenizer.vocab_size, embed_dim), nn.Linear(embed_dim, embed_dim), nn.ReLU(), nn.Linear(embed_dim, tokenizer.vocab_size))
+
     # number of parameters of model
     print("#{} model parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
 
     mambaDNA = LitMambaDNA(model)
 
-    trainer = L.Trainer(limit_train_batches=2, max_epochs=4, limit_val_batches=1, devices=2, accelerator="gpu", log_every_n_steps=50, strategy="ddp", profiler='simple')
-    trainer.fit(mambaDNA, train_dataloader, test_dataloader)
+    trainer = L.Trainer(limit_train_batches=20, max_epochs=4, limit_val_batches=1, devices=2, accelerator="gpu", log_every_n_steps=50, strategy="ddp", use_distributed_sampler=False) #, profiler='simple')
+    trainer.fit(mambaDNA)
