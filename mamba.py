@@ -36,7 +36,7 @@ from typing import Dict, List, Optional, Sequence, Union
 from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
 
 
-if __name__ == '__main__':
+def mamba_training():
     class CharacterTokenizer(PreTrainedTokenizer):
         def __init__(self, characters: Sequence[str], model_max_length: int, padding_side: str='left', **kwargs):
             """Character tokenizer for Hugging Face transformers.
@@ -217,7 +217,7 @@ if __name__ == '__main__':
                             'NC_060936.1', 'NC_060937.1', 'NC_060938.1', 'NC_060939.1', 'NC_060941.1',
                             'NC_060942.1', 'NC_060943.1', 'NC_060944.1', 'NC_060945.1', 'NC_060946.1',
                             'NC_060947.1', 'NC_060948.1']
-        test_entries = ['NC_060930.1', 'NC_060940.1']
+        validation_entries = ['NC_060930.1', 'NC_060940.1']
 
         def __init__(self, fasta_path, ds_entries, rnd_seed=0):
             assert Path(fasta_path).exists
@@ -305,6 +305,7 @@ if __name__ == '__main__':
 
             tokens = self.tokenizer(seq_str, add_special_tokens=False, padding="max_length",
                                     max_length=self.seq_len, truncation=True)
+            # TODO use CharTensor instead of LongTensor
             inpt = torch.LongTensor(tokens["input_ids"]).clone()
 
             # mask
@@ -383,7 +384,7 @@ if __name__ == '__main__':
     seq_len = 1024
     batch_size_train = 1024
     batches_per_step = 16
-    batch_size_test = 64
+    batch_size_val = 64
     n_steps = 5 # 20000
     # optimizer
     lr = 8e-3
@@ -431,8 +432,14 @@ if __name__ == '__main__':
             print("batch_idx {}: Loss {:.6f}; Masked prediction accuracy {:.4f}%".format(batch_idx, loss.item(), accuracy*100.0))
             return loss
 
-        # def test_step(self, batch, batch_idx):
-            # return
+        def val_dataloader(self):
+            seed = torch.distributed.get_rank()
+            val_iter = GenomeIterator(GenomeIterator.T2T_path, GenomeIterator.validation_entries, seed)
+            val_ds = GenomeDataset(val_iter)
+
+            tokenizer = create_genome_tokenizer()
+            val_ds.config(tokenizer, seq_len)
+            return DataLoader(val_ds, batch_size=batch_size_val)
 
         def validation_step(self, batch, batch_idx):
             inpts, trgts = batch
@@ -465,5 +472,10 @@ if __name__ == '__main__':
 
     mambaDNA = LitMambaDNA(model)
 
-    trainer = L.Trainer(limit_train_batches=20, max_epochs=4, limit_val_batches=1, devices=2, accelerator="gpu", log_every_n_steps=50, strategy="ddp", use_distributed_sampler=False) #, profiler='simple')
+    trainer = L.Trainer(max_steps=50, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
+                        devices=4, accelerator="gpu", log_every_n_steps=50, strategy="ddp", use_distributed_sampler=False) #, profiler='simple')
     trainer.fit(mambaDNA)
+
+
+if __name__ == '__main__':
+    mamba_training()
