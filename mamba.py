@@ -13,6 +13,7 @@ import numpy as np
 from mamba_ssm import Mamba
 
 import lightning as L
+from lightning.pytorch.loggers import TensorBoardLogger
 
 from pyfaidx import Fasta
 import pynvml
@@ -337,6 +338,7 @@ def mamba_training():
             self.dropout = nn.Dropout(dropout_level)
 
         def forward(self, x):
+            # TODO check order of pytorch operations
             x = self.mamba(self.norm(x)) + x
             return self.dropout(x)
 
@@ -384,7 +386,7 @@ def mamba_training():
     seq_len = 1024
     batch_size_train = 1024
     batches_per_step = 16
-    batch_size_val = 64
+    batch_size_val = 1024
     n_steps = 5 # 20000
     # optimizer
     lr = 8e-3
@@ -425,11 +427,13 @@ def mamba_training():
         def training_step(self, batch, batch_idx):
             inpts, trgts = batch
             outpts = model(inpts)
-            print("inpts: {}, trgts: {}, outpts: {}".format(inpts.size(), trgts.size(), outpts.size()))
+            # print("inpts: {}, trgts: {}, outpts: {}".format(inpts.size(), trgts.size(), outpts.size()))
             loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
             
             accuracy = comp_next_token_pred_acc(outpts, trgts)
             print("batch_idx {}: Loss {:.6f}; Masked prediction accuracy {:.4f}%".format(batch_idx, loss.item(), accuracy*100.0))
+            self.log("train_loss", loss.item())
+            self.log("train_accuracy", accuracy*100.0)
             return loss
 
         def val_dataloader(self):
@@ -447,6 +451,7 @@ def mamba_training():
             
             accuracy = comp_next_token_pred_acc(outpts, trgts)
             print("batch_idx {} validataion: Masked prediction accuracy {:.4f}%".format(batch_idx, accuracy*100.0))
+            self.log("val_accuracy", accuracy*100.0)
 
         def on_train_batch_start(self, batch, batch_idx):
             stime = time.time()
@@ -472,8 +477,9 @@ def mamba_training():
 
     mambaDNA = LitMambaDNA(model)
 
-    trainer = L.Trainer(max_steps=50, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
-                        devices=4, accelerator="gpu", log_every_n_steps=50, strategy="ddp", use_distributed_sampler=False) #, profiler='simple')
+    logger = TensorBoardLogger("tb_logs", name="mamba_model")
+    trainer = L.Trainer(max_epochs=1, limit_train_batches=1000, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
+                        devices=8, accelerator="gpu", log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False) #, profiler='simple')
     trainer.fit(mambaDNA)
 
 

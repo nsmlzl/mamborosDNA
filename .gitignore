@@ -3,3 +3,5 @@ dataset
 *.pth
 models
 *.swp
+lightning_logs
+tb_logs
