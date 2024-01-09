@@ -1,3 +1,6 @@
+# tested with mamba-ssm v1.1.1, causal-conv1d v1.1.1, transformers v4.36.2,
+# torch v2.1.2, pytorch-lightning v2.1.3, pyfaidx 0.7.2.2
+
 from zipfile import ZipFile
 from io import BytesIO
 import requests
@@ -10,7 +13,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import numpy as np
-from mamba_ssm import Mamba
+from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
+from mamba_ssm.models.config_mamba import MambaConfig
 
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -67,6 +71,18 @@ def mamba_training():
 
             mask_token = AddedToken("[MASK]", lstrip=True, rstrip=False)
 
+            self._vocab_str_to_int = {
+                "[CLS]": 0,
+                "[SEP]": 1,
+                "[BOS]": 2,
+                "[MASK]": 3,
+                "[PAD]": 4,
+                "[RESERVED]": 5,
+                "[UNK]": 6,
+                **{ch: i + 7 for i, ch in enumerate(characters)},
+            }
+            self._vocab_int_to_str = {v: k for k, v in self._vocab_str_to_int.items()}
+
             super().__init__(
                 bos_token=bos_token,
                 eos_token=sep_token,
@@ -81,17 +97,6 @@ def mamba_training():
                 **kwargs,
             )
 
-            self._vocab_str_to_int = {
-                "[CLS]": 0,
-                "[SEP]": 1,
-                "[BOS]": 2,
-                "[MASK]": 3,
-                "[PAD]": 4,
-                "[RESERVED]": 5,
-                "[UNK]": 6,
-                **{ch: i + 7 for i, ch in enumerate(characters)},
-            }
-            self._vocab_int_to_str = {v: k for k, v in self._vocab_str_to_int.items()}
 
         @property
         def vocab_size(self) -> int:
@@ -124,6 +129,11 @@ def mamba_training():
             if token_ids_1 is not None:
                 result += token_ids_1 + sep
             return result
+
+        def get_vocab(self):
+            vocab = {chr(i): i for i in range(self.vocab_size)}
+            vocab.update(self.added_tokens_encoder)
+            return vocab
 
         def get_special_tokens_mask(
             self,
@@ -415,6 +425,9 @@ def mamba_training():
             self.loss_fn = nn.CrossEntropyLoss()
             self.stime = None
 
+        def forward(self, inpts):
+            return self.mamba_model(inpts).logits
+
         def train_dataloader(self):
             seed = torch.distributed.get_rank()
             train_iter = GenomeIterator(GenomeIterator.T2T_path, GenomeIterator.training_entries, seed)
@@ -426,7 +439,7 @@ def mamba_training():
 
         def training_step(self, batch, batch_idx):
             inpts, trgts = batch
-            outpts = model(inpts)
+            outpts = self(inpts)
             # print("inpts: {}, trgts: {}, outpts: {}".format(inpts.size(), trgts.size(), outpts.size()))
             loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
             
@@ -447,7 +460,7 @@ def mamba_training():
 
         def validation_step(self, batch, batch_idx):
             inpts, trgts = batch
-            outpts = model(inpts)
+            outpts = self(inpts)
             
             accuracy = comp_next_token_pred_acc(outpts, trgts)
             print("batch_idx {} validataion: Masked prediction accuracy {:.4f}%".format(batch_idx, accuracy*100.0))
@@ -467,8 +480,11 @@ def mamba_training():
 
     print("Not implemented: Model load/store")
     tokenizer = create_genome_tokenizer()
-    model = MambaDNA(vocab_size=tokenizer.vocab_size, embed_dim=embed_dim,
-                     seq_len=seq_len, n_layers=n_layers, dropout=dropout)
+
+    mamba_config = MambaConfig(d_model=embed_dim, n_layer=n_layers, vocab_size=tokenizer.vocab_size,
+                               ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
+                               pad_vocab_size_multiple=8)
+    model = MambaLMHeadModel(mamba_config)
     # dummy model
     #model = nn.Sequential(nn.Embedding(tokenizer.vocab_size, embed_dim), nn.Linear(embed_dim, embed_dim), nn.ReLU(), nn.Linear(embed_dim, tokenizer.vocab_size))
 
@@ -478,8 +494,8 @@ def mamba_training():
     mambaDNA = LitMambaDNA(model)
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
-    trainer = L.Trainer(max_epochs=1, limit_train_batches=1000, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
-                        devices=8, accelerator="gpu", log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False) #, profiler='simple')
+    trainer = L.Trainer(max_epochs=1, limit_train_batches=5, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
+                        devices=8, accelerator="gpu", log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False, profiler='simple')
     trainer.fit(mambaDNA)
 
 
