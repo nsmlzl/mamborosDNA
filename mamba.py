@@ -9,6 +9,9 @@ from pathlib import Path
 import time
 import random
 import argparse
+import json
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Union
 
 import torch
 import torch.nn as nn
@@ -20,47 +23,18 @@ from mamba_ssm.models.config_mamba import MambaConfig
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
 
+from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
+
 from pyfaidx import Fasta
 import pynvml
 
 
-
-# HyenaDNA tokenizer; code from their jupyter notebook
-"""
-Just a simple character level tokenizer.
-
-From: https://github.com/dariush-bahrami/character-tokenizer/blob/master/charactertokenizer/core.py
-
-CharacterTokenzier for Hugging Face Transformers.
-This is heavily inspired from CanineTokenizer in transformers package.
-"""
-import json
-import os
-from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
-
-from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
-
-
-class CharacterTokenizer(PreTrainedTokenizer):
-    def __init__(self, characters: Sequence[str], model_max_length: int, padding_side: str='left', **kwargs):
-        """Character tokenizer for Hugging Face transformers.
-        Args:
-            characters (Sequence[str]): List of desired characters. Any character which
-                is not included in this list will be replaced by a special token called
-                [UNK] with id=6. Following are list of all of the special tokens with
-                their corresponding ids:
-                    "[CLS]": 0
-                    "[SEP]": 1
-                    "[BOS]": 2
-                    "[MASK]": 3
-                    "[PAD]": 4
-                    "[RESERVED]": 5
-                    "[UNK]": 6
-                an id (starting at 7) will be assigned to each character.
-            model_max_length (int): Model maximum sequence length.
-        """
-        #self.characters = characters
+# Tokenizer based on HyenaDNA's tokenizer, which is based on
+# https://github.com/dariush-bahrami/character-tokenizer/blob/master/charactertokenizer/core.py
+# which itself is inspired by transformer's CanineTokenizer.
+# Updated for transformers v4.36.2
+class DNATokenizer(PreTrainedTokenizer):
+    def __init__(self, model_max_length: int, **kwargs):
         self.model_max_length = model_max_length
         bos_token = AddedToken("[BOS]", lstrip=False, rstrip=False)
         eos_token = AddedToken("[SEP]", lstrip=False, rstrip=False)
@@ -68,13 +42,9 @@ class CharacterTokenizer(PreTrainedTokenizer):
         cls_token = AddedToken("[CLS]", lstrip=False, rstrip=False)
         pad_token = AddedToken("[PAD]", lstrip=False, rstrip=False)
         unk_token = AddedToken("[UNK]", lstrip=False, rstrip=False)
-
         mask_token = AddedToken("[MASK]", lstrip=True, rstrip=False)
 
-        #self._vocab_str_to_int = {
-            #**{ch: i + 0 for i, ch in enumerate(characters)},
-        #}
-        #self._vocab_int_to_str = {v: k for k, v in self._vocab_str_to_int.items()}
+        characters = ['A', 'C', 'G', 'T', 'N']
 
         super().__init__(
             bos_token=bos_token,
@@ -85,13 +55,9 @@ class CharacterTokenizer(PreTrainedTokenizer):
             unk_token=unk_token,
             add_prefix_space=False,
             model_max_length=model_max_length,
-            padding_side=padding_side,
+            padding_side="left",
             **kwargs,
         )
-
-        #for c in characters:
-            #token = AddedToken(c, lstrip=False, rstrip=False)
-            #self.add_tokens(token)
         self.add_tokens(characters)
 
     @property
@@ -101,128 +67,32 @@ class CharacterTokenizer(PreTrainedTokenizer):
     def get_vocab(self):
         return self.added_tokens_encoder
 
-#    def _tokenize(self, text: str) -> List[str]:
-#        print("_tokenize")
-#        return list(text)
-
-#    def _convert_token_to_id(self, token: str) -> int:
-#        print("_convert_token_to_id")
-#        return self.encode(token)
-
-#    def _convert_id_to_token(self, index: int) -> str:
-#        print("_convert_id_to_token")
-#        return self.decode(index)
-
     def convert_tokens_to_string(self, tokens):
         return "".join(tokens)
 
-#    def convert_token_vector_to_string(self, ivector):
-#        out_str = ""
-#        for i in ivector:
-#            out_str = out_str + self._convert_id_to_token(i.item())
-#        return out_str
+    def validate():
+        tokenizer = DNATokenizer(1024)
 
-#    def build_inputs_with_special_tokens(
-#        self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
-#    ) -> List[int]:
-#        print("build_inpts_with_special_tokens")
-#        sep = [self.sep_token_id]
-#        cls = [self.cls_token_id]
-#        result = cls + token_ids_0 + sep
-#        if token_ids_1 is not None:
-#            result += token_ids_1 + sep
-#        return result
+        assert tokenizer.vocab_size == 11, "unexpected vocab_size"
 
-#    def get_special_tokens_mask(
-#        self,
-#        token_ids_0: List[int],
-#        token_ids_1: Optional[List[int]] = None,
-#        already_has_special_tokens: bool = False,
-#    ) -> List[int]:
-#        print("get_special_tokens_mask")
-#        if already_has_special_tokens:
-#            return super().get_special_tokens_mask(
-#                token_ids_0=token_ids_0,
-#                token_ids_1=token_ids_1,
-#                already_has_special_tokens=True,
-#            )
+        assert tokenizer.pad_token_id == 3, "unexpected id for pad token"
+        assert tokenizer.mask_token_id == 5, "unexpected id for mask token"
 
-#        result = [1] + ([0] * len(token_ids_0)) + [1]
-#        if token_ids_1 is not None:
-#            result += ([0] * len(token_ids_1)) + [1]
-#        return result
+        tokenizer_encode_dict = tokenizer.added_tokens_encoder
+        assert len(tokenizer_encode_dict) == 11, "unexpected tokenizer_encode_dict"
+        assert tokenizer_encode_dict["[BOS]"] == 0, "unexpected id for \"[BOS]\" token"
+        assert tokenizer_encode_dict["[UNK]"] == 1, "unexpected id for \"[UNK]\" token"
+        assert tokenizer_encode_dict["[SEP]"] == 2, "unexpected id for \"[SEP]\" token"
+        assert tokenizer_encode_dict["[PAD]"] == 3, "unexpected id for \"[PAD]\" token"
+        assert tokenizer_encode_dict["[CLS]"] == 4, "unexpected id for \"[CLS]\" token"
+        assert tokenizer_encode_dict["[MASK]"] == 5, "unexpected id for \"[MASK]\" token"
+        assert tokenizer_encode_dict["A"] == 6, "unexpected id for \"A\" token"
+        assert tokenizer_encode_dict["C"] == 7, "unexpected id for \"C\" token"
+        assert tokenizer_encode_dict["G"] == 8, "unexpected id for \"G\" token"
+        assert tokenizer_encode_dict["T"] == 9, "unexpected id for \"T\" token"
+        assert tokenizer_encode_dict["N"] == 10, "unexpected id for \"N\" token"
 
-#    def create_token_type_ids_from_sequences(
-#        self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
-#    ) -> List[int]:
-#        print("create_tokens_type_ids_from_sequence")
-#        sep = [self.sep_token_id]
-#        cls = [self.cls_token_id]
-
-#        result = len(cls + token_ids_0 + sep) * [0]
-#        if token_ids_1 is not None:
-#            result += len(token_ids_1 + sep) * [1]
-#        return result
-
-#    def get_config(self) -> Dict:
-#        return {
-#            "char_ords": [ord(ch) for ch in self.characters],
-#            "model_max_length": self.model_max_length,
-#        }
-
-#    @classmethod
-#    def from_config(cls, config: Dict) -> "CharacterTokenizer":
-#        cfg = {}
-#        cfg["characters"] = [chr(i) for i in config["char_ords"]]
-#        cfg["model_max_length"] = config["model_max_length"]
-#        return cls(**cfg)
-
-#    def save_pretrained(self, save_directory: Union[str, os.PathLike], **kwargs):
-#        cfg_file = Path(save_directory) / "tokenizer_config.json"
-#        cfg = self.get_config()
-#        with open(cfg_file, "w") as f:
-#            json.dump(cfg, f, indent=4)
-
-#    @classmethod
-#    def from_pretrained(cls, save_directory: Union[str, os.PathLike], **kwargs):
-#        cfg_file = Path(save_directory) / "tokenizer_config.json"
-#        with open(cfg_file) as f:
-#            cfg = json.load(f)
-#        return cls.from_config(cfg)
-
-
-def create_genome_tokenizer(seq_len):
-    tokenizer = CharacterTokenizer(
-        characters=['A', 'C', 'G', 'T', 'N'],
-        model_max_length=seq_len,
-        add_special_tokens=False,
-        padding_side='left',
-    )
-    return tokenizer
-
-def validate_tokenizer():
-    tokenizer = create_genome_tokenizer(1024)
-
-    assert tokenizer.vocab_size == 11, "unexpected vocab_size"
-
-    assert tokenizer.pad_token_id == 3, "unexpected id for pad token"
-    assert tokenizer.mask_token_id == 5, "unexpected id for mask token"
-
-    tokenizer_encode_dict = tokenizer.added_tokens_encoder
-    assert len(tokenizer_encode_dict) == 11, "unexpected tokenizer_encode_dict"
-    assert tokenizer_encode_dict["[BOS]"] == 0, "unexpected id for \"[BOS]\" token"
-    assert tokenizer_encode_dict["[UNK]"] == 1, "unexpected id for \"[UNK]\" token"
-    assert tokenizer_encode_dict["[SEP]"] == 2, "unexpected id for \"[SEP]\" token"
-    assert tokenizer_encode_dict["[PAD]"] == 3, "unexpected id for \"[PAD]\" token"
-    assert tokenizer_encode_dict["[CLS]"] == 4, "unexpected id for \"[CLS]\" token"
-    assert tokenizer_encode_dict["[MASK]"] == 5, "unexpected id for \"[MASK]\" token"
-    assert tokenizer_encode_dict["A"] == 6, "unexpected id for \"A\" token"
-    assert tokenizer_encode_dict["C"] == 7, "unexpected id for \"C\" token"
-    assert tokenizer_encode_dict["G"] == 8, "unexpected id for \"G\" token"
-    assert tokenizer_encode_dict["T"] == 9, "unexpected id for \"T\" token"
-    assert tokenizer_encode_dict["N"] == 10, "unexpected id for \"N\" token"
-
-    print("Successfull validation of DNATokenizer!")
+        print("Successfull validation of DNATokenizer!")
 
 
 def complement(in_seq):
@@ -354,7 +224,7 @@ class GenomeIterator:
         train_iter = GenomeIterator(GenomeIterator.T2T_path, GenomeIterator.training_entries, 42)
 
         token_len = 30
-        tokenizer = create_genome_tokenizer(token_len)
+        tokenizer = DNATokenizer(token_len)
 
         train_iter.config(tokenizer, token_len)
         print(train_iter.entry_ranges)
@@ -478,7 +348,7 @@ def mamba_training():
             train_iter = GenomeIterator(GenomeIterator.T2T_path, GenomeIterator.training_entries, seed)
             train_ds = GenomeDataset(train_iter)
 
-            tokenizer = create_genome_tokenizer(self.seq_len)
+            tokenizer = DNATokenizer(self.seq_len)
             train_ds.config(tokenizer, seq_len)
             return DataLoader(train_ds, batch_size=batch_size_train)
 
@@ -499,7 +369,7 @@ def mamba_training():
             val_iter = GenomeIterator(GenomeIterator.T2T_path, GenomeIterator.validation_entries, seed)
             val_ds = GenomeDataset(val_iter)
 
-            tokenizer = create_genome_tokenizer(self.seq_len)
+            tokenizer = DNATokenizer(self.seq_len)
             val_ds.config(tokenizer, seq_len)
             return DataLoader(val_ds, batch_size=batch_size_val)
 
@@ -524,7 +394,7 @@ def mamba_training():
         
 
     print("Not implemented: Model load/store")
-    tokenizer = create_genome_tokenizer(seq_len)
+    tokenizer = DNATokenizer(seq_len)
 
     mamba_config = MambaConfig(d_model=embed_dim, n_layer=n_layers, vocab_size=tokenizer.vocab_size,
                                ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
@@ -550,7 +420,7 @@ def main(args):
     if args.validate_dataset:
         GenomeIterator.validate_T2T_ds()
     if args.validate_tokenizer:
-        validate_tokenizer()
+        DNATokenizer.validate()
     if args.run_training:
         mamba_training();
 
