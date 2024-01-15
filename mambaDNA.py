@@ -5,6 +5,7 @@ from zipfile import ZipFile
 from io import BytesIO
 import requests
 import os
+import sys
 from pathlib import Path
 import time
 import random
@@ -33,8 +34,10 @@ import pynvml
 # https://github.com/dariush-bahrami/character-tokenizer/blob/master/charactertokenizer/core.py
 # which itself is inspired by transformer's CanineTokenizer.
 # Updated for transformers v4.36.2
+# TODO note token mapping here
 class DNATokenizer(PreTrainedTokenizer):
-    def __init__(self, model_max_length: int, **kwargs):
+    def __init__(self, model_max_length=1073741824, **kwargs):
+        # default model_max_length of 1Gbp
         self.model_max_length = model_max_length
         bos_token = AddedToken("[BOS]", lstrip=False, rstrip=False)
         eos_token = AddedToken("[SEP]", lstrip=False, rstrip=False)
@@ -44,7 +47,8 @@ class DNATokenizer(PreTrainedTokenizer):
         unk_token = AddedToken("[UNK]", lstrip=False, rstrip=False)
         mask_token = AddedToken("[MASK]", lstrip=True, rstrip=False)
 
-        characters = ['A', 'C', 'G', 'T', 'N']
+        # added swap token to have extra space when performing complement operation
+        characters = ['A', 'C', 'G', 'T', 'N', '[SWAP]']
 
         super().__init__(
             bos_token=bos_token,
@@ -71,15 +75,15 @@ class DNATokenizer(PreTrainedTokenizer):
         return "".join(tokens)
 
     def validate():
-        tokenizer = DNATokenizer(1024)
+        tokenizer = DNATokenizer()
 
-        assert tokenizer.vocab_size == 11, "unexpected vocab_size"
+        assert tokenizer.vocab_size == 12, "unexpected vocab_size"
 
         assert tokenizer.pad_token_id == 3, "unexpected id for pad token"
         assert tokenizer.mask_token_id == 5, "unexpected id for mask token"
 
         tokenizer_encode_dict = tokenizer.added_tokens_encoder
-        assert len(tokenizer_encode_dict) == 11, "unexpected tokenizer_encode_dict"
+        assert len(tokenizer_encode_dict) == 12, "unexpected tokenizer_encode_dict"
         assert tokenizer_encode_dict["[BOS]"] == 0, "unexpected id for \"[BOS]\" token"
         assert tokenizer_encode_dict["[UNK]"] == 1, "unexpected id for \"[UNK]\" token"
         assert tokenizer_encode_dict["[SEP]"] == 2, "unexpected id for \"[SEP]\" token"
@@ -91,28 +95,31 @@ class DNATokenizer(PreTrainedTokenizer):
         assert tokenizer_encode_dict["G"] == 8, "unexpected id for \"G\" token"
         assert tokenizer_encode_dict["T"] == 9, "unexpected id for \"T\" token"
         assert tokenizer_encode_dict["N"] == 10, "unexpected id for \"N\" token"
+        assert tokenizer_encode_dict["[SWAP]"] == 11, "unexpected id for \"[SWAP]\" token"
 
         print("Successfull validation of DNATokenizer!")
 
 
-def complement(in_seq):
-    out_seq = ""
-    for idx, c in enumerate(in_seq):
-        oc = "X"
-        if c == 'A':
-            oc = 'T'
-        elif c == 'T':
-            oc = 'A'
-        elif c == 'C':
-            oc = 'G'
-        elif c == 'G':
-            oc = 'C'
-        elif c == 'N':
-            oc = 'N'
-        else:
-            assert True == False, "char: {}".format(c)
-        out_seq = out_seq + oc
-    return out_seq
+def complement(tokens, tokenizer):
+    a_token = tokenizer.added_tokens_encoder["A"]
+    t_token = tokenizer.added_tokens_encoder["T"]
+    c_token = tokenizer.added_tokens_encoder["C"]
+    g_token = tokenizer.added_tokens_encoder["G"]
+    swap_token = tokenizer.added_tokens_encoder["[SWAP]"]
+
+    tokens = tokens.copy()
+    assert np.count_nonzero(tokens==swap_token)==0, \
+            "input is not allowed to contain any swap tokens"
+
+    # switch A and T
+    tokens[tokens==a_token] = swap_token
+    tokens[tokens==t_token] = a_token
+    tokens[tokens==swap_token] = t_token
+    # switch C and G
+    tokens[tokens==c_token] = swap_token
+    tokens[tokens==g_token] = c_token
+    tokens[tokens==swap_token] = g_token
+    return tokens
 
 
 class GenomeIterator:
@@ -124,19 +131,21 @@ class GenomeIterator:
                         'NC_060947.1', 'NC_060948.1']
     validation_entries = ['NC_060930.1', 'NC_060940.1']
 
-    def __init__(self, fasta_path, ds_entries, rnd_seed=0):
-        assert Path(fasta_path).exists
-        self.fasta = Fasta(fasta_path, one_based_attributes=False)
-
+    def __init__(self, numpy_path, ds_entries, rnd_seed=0):
+        self.gdata = {}
         dtype = np.dtype([('key', 'U20'), ('start', 'int_'), ('end', 'int_')])
         self.entry_ranges = np.empty(len(ds_entries), dtype=dtype)
 
         # only append entries of dataset
         count = 0
         for idx, k in enumerate(ds_entries):
-            assert k in self.fasta.keys(), \
-                "FASTA file does not contain an entry with key {}".format(k)
-            seq_len = len(self.fasta[k])
+            npath = numpy_path + k + '.npy'
+            assert os.path.exists(npath), \
+                "Numpy file of entry {} does not exist".format(k)
+
+            tokens = np.load(npath)
+            self.gdata[k] = tokens
+            seq_len = self.gdata[k].size
             self.entry_ranges[idx] = np.array([(k, count, count + seq_len)], dtype=dtype)
             count = count + seq_len
 
@@ -189,29 +198,36 @@ class GenomeIterator:
         assert key != None
         assert local_idx != -1
 
-        left_bound = 0
-        right_bound = len(self.fasta[key])
-
-        seq = None
+        tokens = self.gdata[key][0]
         if not(rev_compl):
-            seq = self.fasta[key][:local_idx + 1][-self.seq_len:]
+            right_bound = local_idx + 1
+            left_bound = right_bound - self.seq_len
+            if left_bound < 0:
+                left_bound = 0
+            tokens = tokens[left_bound:right_bound]
         else:
-            seq = self.fasta[key][local_idx:][::-1][-self.seq_len:]
-        assert seq != None
-
-        # capitalize all nucleotides
-        seq_str = str(seq).upper()
+            # left and right bounds are switched due to reverse orientation
+            right_bound = local_idx
+            left_bound = right_bound + self.seq_len
+            if left_bound > tokens.size:
+                left_bound = tokens.size
+            tokens = tokens[right_bound:left_bound][::-1]
+        assert tokens.any()
 
         # use complement when reverse
         if rev_compl:
-            seq_str = complement(seq_str)
+            tokens = complement(tokens, self.tokenizer)
         # print(seq_str, len(seq_str))
-        assert len(seq_str) <= self.seq_len
 
-        tokens = self.tokenizer(seq_str, add_special_tokens=False, padding="max_length",
-                                max_length=self.seq_len, truncation=True)
+        # add padding
+        if tokens.size < self.seq_len:
+            padding = np.full((self.seq_len - tokens.size), self.tokenizer.pad_token_id, dtype=np.byte)
+            tokens = np.hstack((padding, tokens))
+
+        assert tokens.size <= self.seq_len
+
         # TODO use CharTensor instead of LongTensor
-        inpt = torch.LongTensor(tokens["input_ids"]).clone()
+        inpt = torch.from_numpy(tokens).to(torch.long).clone()
 
         # mask
         target = inpt.clone()
@@ -221,10 +237,10 @@ class GenomeIterator:
 
     # validate T2T dataset; check if correct tokens are returned for predefined indices
     def validate_T2T_ds():
-        train_iter = GenomeIterator(GenomeIterator.T2T_path, GenomeIterator.training_entries, 42)
+        train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries, 42)
 
         token_len = 30
-        tokenizer = DNATokenizer(token_len)
+        tokenizer = DNATokenizer()
 
         train_iter.config(tokenizer, token_len)
         print(train_iter.entry_ranges)
@@ -261,6 +277,11 @@ class GenomeIterator:
         check(1228377838 + offset, "[PAD]"*28 + "T" + "[MASK]", "[PAD]"*28 + "T" + "A")
         check(2786358510 + offset, "GTTAGGGTTAGGGTTAGGGTTAGGGTTAG" + "[MASK]", "GTTAGGGTTAGGGTTAGGGTTAGGGTTAG" + "G")
         check(2848818478 + offset, "[PAD]"*9 + "CTAACCCTAACCCTAACCCT" + "[MASK]", "[PAD]"*9 + "CTAACCCTAACCCTAACCCT" + "A")
+        # check if nothing was modified
+        check(2848818478, "AGGGTTAGGGTTAGGGTTAGGGTTAGGGT" + "[MASK]", "AGGGTTAGGGTTAGGGTTAGGGTTAGGGT" + "T")
+        check(5, "[PAD]"*24 + "CACCC" + "[MASK]", "[PAD]"*24 + "CACCC" + "T")
+        check(2848818478 + offset, "[PAD]"*9 + "CTAACCCTAACCCTAACCCT" + "[MASK]", "[PAD]"*9 + "CTAACCCTAACCCTAACCCT" + "A")
+        check((5 + offset), "GTTAGGGTTAGGGTTAGGGGTTAGGGTTT" + "[MASK]", "GTTAGGGTTAGGGTTAGGGGTTAGGGTTT" + "A")
 
         print("Succesfull validation of T2T dataset access!")
 
@@ -268,6 +289,15 @@ class GenomeIterator:
 class GenomeDataset(torch.utils.data.IterableDataset):
     hg38_url = 'https://api.ncbi.nlm.nih.gov/datasets/v2alpha/genome/accession/GCF_000001405.40/download'
     t2t_url = 'https://api.ncbi.nlm.nih.gov/datasets/v2alpha/genome/accession/GCF_009914755.1/download'
+
+    T2T_path = "dataset/ncbi_dataset/data/GCF_009914755.1/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna"
+    numpy_path = "dataset/numpy/"
+    training_entries = ['NC_060925.1', 'NC_060926.1', 'NC_060927.1', 'NC_060928.1', 'NC_060929.1',
+                        'NC_060931.1', 'NC_060932.1', 'NC_060933.1', 'NC_060934.1', 'NC_060935.1',
+                        'NC_060936.1', 'NC_060937.1', 'NC_060938.1', 'NC_060939.1', 'NC_060941.1',
+                        'NC_060942.1', 'NC_060943.1', 'NC_060944.1', 'NC_060945.1', 'NC_060946.1',
+                        'NC_060947.1', 'NC_060948.1']
+    validation_entries = ['NC_060930.1', 'NC_060940.1']
 
     def __init__(self, genomeIterator):
         super().__init__()
@@ -299,6 +329,29 @@ class GenomeDataset(torch.utils.data.IterableDataset):
     def download_t2t_data():
         GenomeDataset.download_genetic_data(GenomeDataset.t2t_url)
 
+    def create_np_data():
+        fasta_path=GenomeDataset.T2T_path
+
+        assert Path(fasta_path).exists
+        fasta = Fasta(fasta_path, one_based_attributes=False)
+
+        tokenizer = DNATokenizer()
+
+        data_dir_path = GenomeDataset.numpy_path
+        os.makedirs(data_dir_path, exist_ok=True)
+
+        keys = list(fasta.keys())
+        keys = keys
+        print("Start conversion of FASTA entries to numpy arrays")
+        for idx, k in enumerate(keys):
+            # capitalize all nucleotides
+            seq = str(fasta[k][:]).upper()
+            tokens = tokenizer(seq, add_special_tokens=False, padding=False, truncation=False, return_tensors='np')
+            tokens = tokens["input_ids"].astype(np.byte)
+
+            file_path = data_dir_path + k + '.npy'
+            np.save(file_path, tokens)
+            print("{}/{}: Stored entry {} in {}".format(idx+1, len(keys), k, file_path))
 
 
 def mamba_training():
@@ -345,10 +398,10 @@ def mamba_training():
 
         def train_dataloader(self):
             seed = torch.distributed.get_rank()
-            train_iter = GenomeIterator(GenomeIterator.T2T_path, GenomeIterator.training_entries, seed)
+            train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries, seed)
             train_ds = GenomeDataset(train_iter)
 
-            tokenizer = DNATokenizer(self.seq_len)
+            tokenizer = DNATokenizer()
             train_ds.config(tokenizer, seq_len)
             return DataLoader(train_ds, batch_size=batch_size_train)
 
@@ -366,10 +419,10 @@ def mamba_training():
 
         def val_dataloader(self):
             seed = torch.distributed.get_rank()
-            val_iter = GenomeIterator(GenomeIterator.T2T_path, GenomeIterator.validation_entries, seed)
+            val_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.validation_entries, seed)
             val_ds = GenomeDataset(val_iter)
 
-            tokenizer = DNATokenizer(self.seq_len)
+            tokenizer = DNATokenizer()
             val_ds.config(tokenizer, seq_len)
             return DataLoader(val_ds, batch_size=batch_size_val)
 
@@ -393,8 +446,10 @@ def mamba_training():
             return optimizer
         
 
+    torch.set_float32_matmul_precision('medium')
+
     print("Not implemented: Model load/store")
-    tokenizer = DNATokenizer(seq_len)
+    tokenizer = DNATokenizer()
 
     mamba_config = MambaConfig(d_model=embed_dim, n_layer=n_layers, vocab_size=tokenizer.vocab_size,
                                ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
@@ -409,14 +464,16 @@ def mamba_training():
     mambaDNA = LitMambaDNA(model, seq_len)
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
-    trainer = L.Trainer(max_epochs=1, limit_train_batches=5, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
+    trainer = L.Trainer(max_epochs=1, limit_train_batches=1000, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
                         devices=8, accelerator="gpu", log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False, profiler='simple')
     trainer.fit(mambaDNA)
 
 
 def main(args):
-    if args.download_data:
+    if args.download_dataset:
         GenomeDataset.download_t2t_data()
+    if args.create_np_dataset:
+        GenomeDataset.create_np_data()
     if args.validate_dataset:
         GenomeIterator.validate_T2T_ds()
     if args.validate_tokenizer:
@@ -427,7 +484,8 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog="MambaDNA")
-    parser.add_argument("--download_data", action="store_true", help="download the genetic data")
+    parser.add_argument("--download_dataset", action="store_true", help="download T2T dataset")
+    parser.add_argument("--create_np_dataset", action="store_true", help="create numpy datastructure from FASTA file")
     parser.add_argument("--validate_dataset", action="store_true", help="validate access of T2T dataset")
     parser.add_argument("--validate_tokenizer", action="store_true", help="validate tokenizer")
     parser.add_argument("-r", "--run_training", action="store_true", help="run training")
