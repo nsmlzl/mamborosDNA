@@ -34,7 +34,19 @@ import pynvml
 # https://github.com/dariush-bahrami/character-tokenizer/blob/master/charactertokenizer/core.py
 # which itself is inspired by transformer's CanineTokenizer.
 # Updated for transformers v4.36.2
-# TODO note token mapping here
+# Token mapping:
+# [BOS]  : 0
+# [UNK]  : 1
+# [SEP]  : 2
+# [PAD]  : 3
+# [CLS]  : 4
+# [MASK] : 5
+# A      : 6
+# C      : 7
+# G      : 8
+# T      : 9
+# N      : 10
+# [SWAP] : 11 (extra token space used for swap operation in complement operation)
 class DNATokenizer(PreTrainedTokenizer):
     def __init__(self, model_max_length=1073741824, **kwargs):
         # default model_max_length of 1Gbp
@@ -123,14 +135,6 @@ def complement(tokens, tokenizer):
 
 
 class GenomeIterator:
-    T2T_path = "dataset/ncbi_dataset/data/GCF_009914755.1/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna"
-    training_entries = ['NC_060925.1', 'NC_060926.1', 'NC_060927.1', 'NC_060928.1', 'NC_060929.1',
-                        'NC_060931.1', 'NC_060932.1', 'NC_060933.1', 'NC_060934.1', 'NC_060935.1',
-                        'NC_060936.1', 'NC_060937.1', 'NC_060938.1', 'NC_060939.1', 'NC_060941.1',
-                        'NC_060942.1', 'NC_060943.1', 'NC_060944.1', 'NC_060945.1', 'NC_060946.1',
-                        'NC_060947.1', 'NC_060948.1']
-    validation_entries = ['NC_060930.1', 'NC_060940.1']
-
     def __init__(self, numpy_path, ds_entries, rnd_seed=0):
         self.gdata = {}
         dtype = np.dtype([('key', 'U20'), ('start', 'int_'), ('end', 'int_')])
@@ -173,6 +177,7 @@ class GenomeIterator:
         self.rnd_gen = random.Random(self.rnd_seed)
 
     def __next__(self):
+        # TODO remove tokenizer from GenomeIterator? Only used for token-ids; no performance improvement
         assert self.tokenizer != None, "Tokenizer need to be set; run config() before usage"
         assert self.seq_len != None, "Sequence length need to be set; run config before usage"
 
@@ -312,33 +317,26 @@ class GenomeDataset(torch.utils.data.IterableDataset):
 
 
     def download_genetic_data(dataset_url):
-        print("download started...")
+        print("Download started...")
         response = requests.get(dataset_url, params={'include_annotation_type': 'GENOME_FASTA'})
         if response.status_code == 200:
             data_dir_path = 'dataset'
             os.makedirs(data_dir_path, exist_ok=True)
             with BytesIO(response.content) as zip_buffer:
                 ZipFile(zip_buffer, 'r').extractall(path=data_dir_path)
-            print("dataset ready")
+            print("Download complete!")
 
             print("FASTA files:")
             fpaths = list(Path('dataset').rglob('*.fna'))
             for fpath in fpaths:
                 print(fpath)
 
-    def download_t2t_data():
-        GenomeDataset.download_genetic_data(GenomeDataset.t2t_url)
-
-    def create_np_data():
-        fasta_path=GenomeDataset.T2T_path
-
+    def create_np_data(fasta_path, np_dir_path):
         assert Path(fasta_path).exists
         fasta = Fasta(fasta_path, one_based_attributes=False)
+        os.makedirs(np_dir_path, exist_ok=True)
 
         tokenizer = DNATokenizer()
-
-        data_dir_path = GenomeDataset.numpy_path
-        os.makedirs(data_dir_path, exist_ok=True)
 
         keys = list(fasta.keys())
         keys = keys
@@ -349,9 +347,14 @@ class GenomeDataset(torch.utils.data.IterableDataset):
             tokens = tokenizer(seq, add_special_tokens=False, padding=False, truncation=False, return_tensors='np')
             tokens = tokens["input_ids"].astype(np.byte)
 
-            file_path = data_dir_path + k + '.npy'
+            file_path = np_dir_path + k + '.npy'
             np.save(file_path, tokens)
             print("{}/{}: Stored entry {} in {}".format(idx+1, len(keys), k, file_path))
+
+    # download data from NCBI server and precompute for numpy dataset
+    def get_t2t_data():
+        GenomeDataset.download_genetic_data(GenomeDataset.t2t_url)
+        GenomeDataset.create_np_data(GenomeDataset.T2T_path, GenomeDataset.numpy_path)
 
 
 def mamba_training():
@@ -470,10 +473,8 @@ def mamba_training():
 
 
 def main(args):
-    if args.download_dataset:
-        GenomeDataset.download_t2t_data()
-    if args.create_np_dataset:
-        GenomeDataset.create_np_data()
+    if args.get_dataset:
+        GenomeDataset.get_t2t_data()
     if args.validate_dataset:
         GenomeIterator.validate_T2T_ds()
     if args.validate_tokenizer:
@@ -484,8 +485,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog="MambaDNA")
-    parser.add_argument("--download_dataset", action="store_true", help="download T2T dataset")
-    parser.add_argument("--create_np_dataset", action="store_true", help="create numpy datastructure from FASTA file")
+    parser.add_argument("--get_dataset", action="store_true", help="download and precompute T2T dataset")
     parser.add_argument("--validate_dataset", action="store_true", help="validate access of T2T dataset")
     parser.add_argument("--validate_tokenizer", action="store_true", help="validate tokenizer")
     parser.add_argument("-r", "--run_training", action="store_true", help="run training")
