@@ -357,7 +357,7 @@ class GenomeDataset(torch.utils.data.IterableDataset):
         GenomeDataset.create_np_data(GenomeDataset.T2T_path, GenomeDataset.numpy_path)
 
 
-def mamba_training():
+def mamba_training(ckpt_path=None):
     # parameters
     embed_dim = 128
     n_layers = 6
@@ -394,6 +394,7 @@ def mamba_training():
             self.mamba_model = mamba_model
             self.loss_fn = nn.CrossEntropyLoss()
             self.seq_len = seq_len
+            self.save_hyperparameters(ignore=['mamba_model'])
 
         def forward(self, inpts):
             return self.mamba_model(inpts).logits
@@ -444,25 +445,21 @@ def mamba_training():
 
     torch.set_float32_matmul_precision('medium')
 
-    print("Not implemented: Model load/store")
     tokenizer = DNATokenizer()
-
     mamba_config = MambaConfig(d_model=embed_dim, n_layer=n_layers, vocab_size=tokenizer.vocab_size,
                                ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
                                pad_vocab_size_multiple=8)
     model = MambaLMHeadModel(mamba_config)
-    # dummy model
-    #model = nn.Sequential(nn.Embedding(tokenizer.vocab_size, embed_dim), nn.Linear(embed_dim, embed_dim), nn.ReLU(), nn.Linear(embed_dim, tokenizer.vocab_size))
-
-    # number of parameters of model
-    print("#{} model parameters".format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
-
     mambaDNA = LitMambaDNA(model, seq_len)
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
     trainer = L.Trainer(max_epochs=1, limit_train_batches=1000, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
                         devices=8, accelerator="gpu", log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False, profiler='simple')
-    trainer.fit(mambaDNA)
+    if ckpt_path == None:
+        trainer.fit(mambaDNA)
+    else:
+        print("Loading mambaDNA from checkpoint {}".format(ckpt_path))
+        trainer.fit(mambaDNA, ckpt_path=ckpt_path)
 
 
 def main(args):
@@ -472,8 +469,10 @@ def main(args):
         GenomeIterator.validate_T2T_ds()
     if args.validate_tokenizer:
         DNATokenizer.validate()
-    if args.run_training:
+    if args.run_training == True:
         mamba_training();
+    elif args.run_training:
+        mamba_training(ckpt_path=args.run_training)
 
 
 if __name__ == '__main__':
@@ -481,7 +480,8 @@ if __name__ == '__main__':
     parser.add_argument("--get_dataset", action="store_true", help="download and precompute T2T dataset")
     parser.add_argument("--validate_dataset", action="store_true", help="validate access of T2T dataset")
     parser.add_argument("--validate_tokenizer", action="store_true", help="validate tokenizer")
-    parser.add_argument("-r", "--run_training", action="store_true", help="run training")
+    parser.add_argument("-r", "--run_training", nargs="?", const=True, default=False, metavar="path/to/checkpoint.chpt",
+                        help="run training; optionally provide a path to a checkpoint file")
     args = parser.parse_args()
 
     main(args)
