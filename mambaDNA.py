@@ -393,7 +393,6 @@ def mamba_training():
             super().__init__()
             self.mamba_model = mamba_model
             self.loss_fn = nn.CrossEntropyLoss()
-            self.stime = None
             self.seq_len = seq_len
 
         def forward(self, inpts):
@@ -417,7 +416,7 @@ def mamba_training():
             accuracy = comp_next_token_pred_acc(outpts, trgts)
             #print("batch_idx {}: Loss {:.6f}; Masked prediction accuracy {:.4f}%".format(batch_idx, loss.item(), accuracy*100.0))
             self.log("train_loss", loss.item(), sync_dist=True)
-            self.log("train_accuracy", accuracy*100.0, sync_dist=True)
+            self.log("train_accuracy", accuracy*100.0, sync_dist=True, prog_bar=True)
             return loss
 
         def val_dataloader(self):
@@ -437,12 +436,6 @@ def mamba_training():
             #print("batch_idx {} validataion: Masked prediction accuracy {:.4f}%".format(batch_idx, accuracy*100.0))
             self.log("val_accuracy", accuracy*100.0, sync_dist=True)
 
-        def on_train_batch_start(self, batch, batch_idx):
-            stime = time.time()
-            if self.stime != None:
-                print("Elapsed time: {:.2f}s".format(stime - self.stime))
-            self.stime = stime
-            
         def configure_optimizers(self):
             optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95),
                                           weight_decay=weight_decay) #eps=epsilon, 
