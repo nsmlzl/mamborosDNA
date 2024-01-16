@@ -415,9 +415,9 @@ def mamba_training():
             loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
             
             accuracy = comp_next_token_pred_acc(outpts, trgts)
-            print("batch_idx {}: Loss {:.6f}; Masked prediction accuracy {:.4f}%".format(batch_idx, loss.item(), accuracy*100.0))
-            self.log("train_loss", loss.item())
-            self.log("train_accuracy", accuracy*100.0)
+            #print("batch_idx {}: Loss {:.6f}; Masked prediction accuracy {:.4f}%".format(batch_idx, loss.item(), accuracy*100.0))
+            self.log("train_loss", loss.item(), sync_dist=True)
+            self.log("train_accuracy", accuracy*100.0, sync_dist=True)
             return loss
 
         def val_dataloader(self):
@@ -434,8 +434,8 @@ def mamba_training():
             outpts = self(inpts)
             
             accuracy = comp_next_token_pred_acc(outpts, trgts)
-            print("batch_idx {} validataion: Masked prediction accuracy {:.4f}%".format(batch_idx, accuracy*100.0))
-            self.log("val_accuracy", accuracy*100.0)
+            #print("batch_idx {} validataion: Masked prediction accuracy {:.4f}%".format(batch_idx, accuracy*100.0))
+            self.log("val_accuracy", accuracy*100.0, sync_dist=True)
 
         def on_train_batch_start(self, batch, batch_idx):
             stime = time.time()
