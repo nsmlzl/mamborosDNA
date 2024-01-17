@@ -389,15 +389,25 @@ def mamba_training(ckpt_path=None):
 
 
     class LitMambaDNA(L.LightningModule):
-        def __init__(self, mamba_model, seq_len):
+        def __init__(self, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
             super().__init__()
-            self.mamba_model = mamba_model
+            self.mambaDNA = MambaLMHeadModel(mamba_config)
+            #vocab_size= mamba_config.vocab_size
+            #embed_dim = mamba_config.d_model
+            #self.mambaDNA = nn.Sequential(nn.Embedding(vocab_size, embed_dim), nn.Linear(embed_dim, embed_dim), nn.ReLU(), nn.Linear(embed_dim, vocab_size))
             self.loss_fn = nn.CrossEntropyLoss()
+
             self.seq_len = seq_len
-            self.save_hyperparameters(ignore=['mamba_model'])
+            self.lr = lr
+            self.weight_decay = weight_decay
+            self.batch_size_train = batch_size_train
+            self.batch_size_val = batch_size_val
+
+            self.save_hyperparameters(ignore=['mambaDNA'])
 
         def forward(self, inpts):
-            return self.mamba_model(inpts).logits
+            return self.mambaDNA(inpts).logits
+            #return self.mambaDNA(inpts)
 
         def train_dataloader(self):
             seed = torch.distributed.get_rank()
@@ -405,8 +415,8 @@ def mamba_training(ckpt_path=None):
             train_ds = GenomeDataset(train_iter)
 
             tokenizer = DNATokenizer()
-            train_ds.config(tokenizer, seq_len)
-            return DataLoader(train_ds, batch_size=batch_size_train)
+            train_ds.config(tokenizer, self.seq_len)
+            return DataLoader(train_ds, batch_size=self.batch_size_train)
 
         def training_step(self, batch, batch_idx):
             inpts, trgts = batch
@@ -426,8 +436,8 @@ def mamba_training(ckpt_path=None):
             val_ds = GenomeDataset(val_iter)
 
             tokenizer = DNATokenizer()
-            val_ds.config(tokenizer, seq_len)
-            return DataLoader(val_ds, batch_size=batch_size_val)
+            val_ds.config(tokenizer, self.seq_len)
+            return DataLoader(val_ds, batch_size=self.batch_size_val)
 
         def validation_step(self, batch, batch_idx):
             inpts, trgts = batch
@@ -438,8 +448,8 @@ def mamba_training(ckpt_path=None):
             self.log("val_accuracy", accuracy*100.0, sync_dist=True)
 
         def configure_optimizers(self):
-            optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95),
-                                          weight_decay=weight_decay) #eps=epsilon, 
+            optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
+                                          weight_decay=self.weight_decay) #eps=epsilon,
             return optimizer
         
 
@@ -449,17 +459,16 @@ def mamba_training(ckpt_path=None):
     mamba_config = MambaConfig(d_model=embed_dim, n_layer=n_layers, vocab_size=tokenizer.vocab_size,
                                ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
                                pad_vocab_size_multiple=8)
-    model = MambaLMHeadModel(mamba_config)
-    mambaDNA = LitMambaDNA(model, seq_len)
+    if ckpt_path == None:
+        mambaDNA = LitMambaDNA(mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val)
+    else:
+        print("Loading mambaDNA from checkpoint {}".format(ckpt_path))
+        mambaDNA = LitMambaDNA.load_from_checkpoint(ckpt_path, map_location="cpu")
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
     trainer = L.Trainer(max_epochs=1, limit_train_batches=1000, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
                         devices=8, accelerator="gpu", log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False, profiler='simple')
-    if ckpt_path == None:
-        trainer.fit(mambaDNA)
-    else:
-        print("Loading mambaDNA from checkpoint {}".format(ckpt_path))
-        trainer.fit(mambaDNA, ckpt_path=ckpt_path)
+    trainer.fit(mambaDNA)
 
 
 def main(args):
@@ -472,6 +481,7 @@ def main(args):
     if args.run_training == True:
         mamba_training();
     elif args.run_training:
+        # only pass ckpt_path when actually set
         mamba_training(ckpt_path=args.run_training)
 
 
