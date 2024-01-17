@@ -392,9 +392,6 @@ def mamba_training(ckpt_path=None):
         def __init__(self, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
             super().__init__()
             self.mambaDNA = MambaLMHeadModel(mamba_config)
-            #vocab_size= mamba_config.vocab_size
-            #embed_dim = mamba_config.d_model
-            #self.mambaDNA = nn.Sequential(nn.Embedding(vocab_size, embed_dim), nn.Linear(embed_dim, embed_dim), nn.ReLU(), nn.Linear(embed_dim, vocab_size))
             self.loss_fn = nn.CrossEntropyLoss()
 
             self.seq_len = seq_len
@@ -407,7 +404,6 @@ def mamba_training(ckpt_path=None):
 
         def forward(self, inpts):
             return self.mambaDNA(inpts).logits
-            #return self.mambaDNA(inpts)
 
         def train_dataloader(self):
             seed = torch.distributed.get_rank()
