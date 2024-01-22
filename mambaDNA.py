@@ -137,7 +137,7 @@ def complement(tokens, tokenizer):
 class GenomeIterator:
     def __init__(self, numpy_path, ds_entries, rnd_seed=0):
         self.gdata = {}
-        dtype = np.dtype([('key', 'U20'), ('start', 'int_'), ('end', 'int_')])
+        dtype = np.dtype([('key', 'U25'), ('start', 'int_'), ('end', 'int_')])
         self.entry_ranges = np.empty(len(ds_entries), dtype=dtype)
 
         # only append entries of dataset
@@ -146,6 +146,10 @@ class GenomeIterator:
             npath = numpy_path + k + '.npy'
             assert os.path.exists(npath), \
                 "Numpy file of entry {} does not exist".format(k)
+
+            # dtype of key set to U25; expects string <=25 chars
+            assert len(k) <= 25, \
+                   "Key string length of {} (len {}) exceeds entry_ranges limit; update dtype".format(k, len(k))
 
             tokens = np.load(npath)
             self.gdata[k] = tokens
@@ -217,7 +221,7 @@ class GenomeIterator:
             if left_bound > tokens.size:
                 left_bound = tokens.size
             tokens = tokens[right_bound:left_bound][::-1]
-        assert tokens.any()
+        assert tokens.any(), "tokens: {}".format(tokens)
 
         # use complement when reverse
         if rev_compl:
@@ -242,16 +246,44 @@ class GenomeIterator:
 
     # validate T2T dataset; check if correct tokens are returned for predefined indices
     def validate_T2T_ds():
-        train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries, 42)
+        # check T2T training / validation entry split; no entries are in both sets
+        s_train_T2T = set(GenomeDataset.training_entries_T2T)
+        s_valid_T2T = set(GenomeDataset.validation_entries_T2T)
+        common_T2T = s_train_T2T.intersection(s_valid_T2T)
+        assert not common_T2T, \
+               "T2T training and validation dataset share common entries {}".format(common_T2T)
+        T2T_entry_cnt = len(GenomeDataset.training_entries_T2T) + len(GenomeDataset.validation_entries_T2T)
+        assert T2T_entry_cnt == 24, \
+               "Expected a total of 24 entries for T2T dataset; got {} entries".format(T2T_entry_cnt)
+        print("T2T training and validation sets valid.")
+        # check yeast dataset
+        s_train_yeast = set(GenomeDataset.training_entries_yeast)
+        s_valid_yeast = set(GenomeDataset.validation_entries_yeast)
+        common_yeast = s_train_yeast.intersection(s_valid_yeast)
+        assert not common_yeast, \
+               "Yeast training and validation dataset share common entries {}".format(common_yeast)
+        yeast_entry_cnt = len(GenomeDataset.training_entries_yeast) + len(GenomeDataset.validation_entries_yeast)
+        assert yeast_entry_cnt == 112, \
+               "Expected a total of 112 entries for T2T dataset; got {} entries".format(yeast_entry_cnt)
+        print("Yeast training and validation sets valid.")
+
+
+        yeast_train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries_yeast, 42)
+        yeast_valid_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.validation_entries_yeast, 42)
+        T2T_train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries_T2T, 42)
+        T2T_valid_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.validation_entries_T2T, 42)
 
         token_len = 30
         tokenizer = DNATokenizer()
 
-        train_iter.config(tokenizer, token_len)
-        print(train_iter.entry_ranges)
+        for giter in [yeast_train_iter, yeast_valid_iter, T2T_train_iter, T2T_valid_iter]:
+            giter.config(tokenizer, token_len)
+            assert giter.__next__()
+
+        print(T2T_train_iter.entry_ranges)
 
         def check(idx, expct_inpt, expct_trgt):
-            inpt, trgt = train_iter.get_seq(idx)
+            inpt, trgt = T2T_train_iter.get_seq(idx)
             actual_trgt = tokenizer.convert_tokens_to_string(tokenizer.convert_ids_to_tokens(trgt))
             actual_inpt = tokenizer.convert_tokens_to_string(tokenizer.convert_ids_to_tokens(inpt))
 
@@ -294,15 +326,55 @@ class GenomeIterator:
 class GenomeDataset(torch.utils.data.IterableDataset):
     hg38_url = 'https://api.ncbi.nlm.nih.gov/datasets/v2alpha/genome/accession/GCF_000001405.40/download'
     t2t_url = 'https://api.ncbi.nlm.nih.gov/datasets/v2alpha/genome/accession/GCF_009914755.1/download'
+    yeast_url = 'http://hypervolu.me/~erik/yeast/cerevisiae.pan.fa.gz'
 
     T2T_path = "dataset/ncbi_dataset/data/GCF_009914755.1/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna"
+    yeast_path = "dataset/cerevisiae.pan.fa"
     numpy_path = "dataset/numpy/"
-    training_entries = ['NC_060925.1', 'NC_060926.1', 'NC_060927.1', 'NC_060928.1', 'NC_060929.1',
-                        'NC_060931.1', 'NC_060932.1', 'NC_060933.1', 'NC_060934.1', 'NC_060935.1',
-                        'NC_060936.1', 'NC_060937.1', 'NC_060938.1', 'NC_060939.1', 'NC_060941.1',
-                        'NC_060942.1', 'NC_060943.1', 'NC_060944.1', 'NC_060945.1', 'NC_060946.1',
-                        'NC_060947.1', 'NC_060948.1']
-    validation_entries = ['NC_060930.1', 'NC_060940.1']
+
+    training_entries_T2T = ['NC_060925.1', 'NC_060926.1', 'NC_060927.1', 'NC_060928.1', 'NC_060929.1',
+                            'NC_060931.1', 'NC_060932.1', 'NC_060933.1', 'NC_060934.1', 'NC_060935.1',
+                            'NC_060936.1', 'NC_060937.1', 'NC_060938.1', 'NC_060939.1', 'NC_060941.1',
+                            'NC_060942.1', 'NC_060943.1', 'NC_060944.1', 'NC_060945.1', 'NC_060946.1',
+                            'NC_060947.1', 'NC_060948.1']
+    validation_entries_T2T = ['NC_060930.1', 'NC_060940.1']
+
+    training_entries_yeast = ['S288C#1#chrII', 'S288C#1#chrIII', 'S288C#1#chrIV', 'S288C#1#chrV',
+                              'S288C#1#chrVI', 'S288C#1#chrVII', 'S288C#1#chrIX', 'S288C#1#chrX',
+                              'S288C#1#chrXI', 'S288C#1#chrXII', 'S288C#1#chrXIII', 'S288C#1#chrXIV',
+                              'S288C#1#chrXVI',
+                              'DBVPG6765#1#chrI', 'DBVPG6765#1#chrIII', 'DBVPG6765#1#chrIV',
+                              'DBVPG6765#1#chrV', 'DBVPG6765#1#chrVI', 'DBVPG6765#1#chrVII',
+                              'DBVPG6765#1#chrVIII', 'DBVPG6765#1#chrX', 'DBVPG6765#1#chrXI',
+                              'DBVPG6765#1#chrXII', 'DBVPG6765#1#chrXIII', 'DBVPG6765#1#chrXIV',
+                              'DBVPG6765#1#chrXV',
+                              'UWOPS034614#1#chrI', 'UWOPS034614#1#chrII', 'UWOPS034614#1#chrIV',
+                              'UWOPS034614#1#chrV', 'UWOPS034614#1#chrVI', 'UWOPS034614#1#chrVII',
+                              'UWOPS034614#1#chrVIII', 'UWOPS034614#1#chrIX', 'UWOPS034614#1#chrXI',
+                              'UWOPS034614#1#chrXII', 'UWOPS034614#1#chrXIII', 'UWOPS034614#1#chrXIV',
+                              'UWOPS034614#1#chrXV', 'UWOPS034614#1#chrXVI',
+                              'Y12#1#chrI', 'Y12#1#chrII', 'Y12#1#chrIII', 'Y12#1#chrV',
+                              'Y12#1#chrVI', 'Y12#1#chrVII', 'Y12#1#chrVIII', 'Y12#1#chrIX',
+                              'Y12#1#chrX', 'Y12#1#chrXII', 'Y12#1#chrXIII', 'Y12#1#chrXIV',
+                              'Y12#1#chrXV', 'Y12#1#chrXVI',
+                              'YPS128#1#chrI', 'YPS128#1#chrII', 'YPS128#1#chrIII', 'YPS128#1#chrIV',
+                              'YPS128#1#chrVI', 'YPS128#1#chrVII', 'YPS128#1#chrVIII', 'YPS128#1#chrIX',
+                              'YPS128#1#chrX', 'YPS128#1#chrXI', 'YPS128#1#chrXIII', 'YPS128#1#chrXIV',
+                              'YPS128#1#chrXV', 'YPS128#1#chrXVI',
+                              'SK1#1#chrI', 'SK1#1#chrII', 'SK1#1#chrIII', 'SK1#1#chrIV',
+                              'SK1#1#chrV', 'SK1#1#chrVII', 'SK1#1#chrVIII', 'SK1#1#chrIX',
+                              'SK1#1#chrX', 'SK1#1#chrXI', 'SK1#1#chrXII', 'SK1#1#chrXIV',
+                              'SK1#1#chrXV', 'SK1#1#chrXVI',
+                              'DBVPG6044#1#chrI', 'DBVPG6044#1#chrII', 'DBVPG6044#1#chrIII',
+                              'DBVPG6044#1#chrIV', 'DBVPG6044#1#chrV', 'DBVPG6044#1#chrVI',
+                              'DBVPG6044#1#chrVIII', 'DBVPG6044#1#chrIX', 'DBVPG6044#1#chrX',
+                              'DBVPG6044#1#chrXI', 'DBVPG6044#1#chrXII', 'DBVPG6044#1#chrXIII',
+                              'DBVPG6044#1#chrXV', 'DBVPG6044#1#chrXVI']
+    validation_entries_yeast = ['S288C#1#chrI', 'DBVPG6765#1#chrII', 'UWOPS034614#1#chrIII', 'Y12#1#chrIV',
+                                'YPS128#1#chrV', 'SK1#1#chrVI', 'DBVPG6044#1#chrVII', 'S288C#1#chrVIII',
+                                'DBVPG6765#1#chrIX', 'UWOPS034614#1#chrX', 'Y12#1#chrXI', 'YPS128#1#chrXII',
+                                'SK1#1#chrXIII', 'DBVPG6044#1#chrXIV', 'S288C#1#chrXV', 'DBVPG6765#1#chrXVI']
+
 
     def __init__(self, genomeIterator):
         super().__init__()
@@ -356,6 +428,19 @@ class GenomeDataset(torch.utils.data.IterableDataset):
         GenomeDataset.download_genetic_data(GenomeDataset.t2t_url)
         GenomeDataset.create_np_data(GenomeDataset.T2T_path, GenomeDataset.numpy_path)
 
+    # manually download Erik's yeast dataset and then convert into numpy arrays
+    def get_yeast_data():
+        if not Path(GenomeDataset.yeast_path).exists():
+            # For now, print instructions for manually downloading the dataset
+            print("File not found: {}".format(GenomeDataset.yeast_path))
+            print("Download with the following commands:")
+            print("$ mkdir dataset; cd dataset")
+            print("$ curl -O {}".format(GenomeDataset.yeast_url))
+            print("$ gzip -d cerevisiae.pan.fa.gz")
+            return
+
+        GenomeDataset.create_np_data(GenomeDataset.yeast_path, GenomeDataset.numpy_path)
+
 
 def mamba_training(ckpt_path=None):
     # parameters
@@ -407,7 +492,7 @@ def mamba_training(ckpt_path=None):
 
         def train_dataloader(self):
             seed = torch.distributed.get_rank()
-            train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries, seed)
+            train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries_yeast, seed)
             train_ds = GenomeDataset(train_iter)
 
             tokenizer = DNATokenizer()
@@ -428,7 +513,7 @@ def mamba_training(ckpt_path=None):
 
         def val_dataloader(self):
             seed = torch.distributed.get_rank()
-            val_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.validation_entries, seed)
+            val_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.validation_entries_yeast, seed)
             val_ds = GenomeDataset(val_iter)
 
             tokenizer = DNATokenizer()
@@ -468,8 +553,10 @@ def mamba_training(ckpt_path=None):
 
 
 def main(args):
-    if args.get_dataset:
+    if args.get_dataset_T2T:
         GenomeDataset.get_t2t_data()
+    if args.get_dataset_yeast:
+        GenomeDataset.get_yeast_data()
     if args.validate_dataset:
         GenomeIterator.validate_T2T_ds()
     if args.validate_tokenizer:
@@ -483,8 +570,9 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog="MambaDNA")
-    parser.add_argument("--get_dataset", action="store_true", help="download and precompute T2T dataset")
-    parser.add_argument("--validate_dataset", action="store_true", help="validate access of T2T dataset")
+    parser.add_argument("--get_dataset_T2T", action="store_true", help="download and precompute T2T dataset")
+    parser.add_argument("--get_dataset_yeast", action="store_true", help="download and precompute yeast dataset")
+    parser.add_argument("--validate_dataset", action="store_true", help="validate training/validation entry sets and access of T2T dataset")
     parser.add_argument("--validate_tokenizer", action="store_true", help="validate tokenizer")
     parser.add_argument("-r", "--run_training", nargs="?", const=True, default=False, metavar="path/to/checkpoint.chpt",
                         help="run training; optionally provide a path to a checkpoint file")
