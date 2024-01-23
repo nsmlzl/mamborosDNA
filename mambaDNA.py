@@ -11,6 +11,7 @@ import time
 import random
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
 
@@ -472,6 +473,23 @@ def mamba_training(ckpt_path=None):
         accuracy = corr_pred.sum().item() / target.size(-1)
         return accuracy
 
+    # compute perplexity for a batch of logits:
+    # this implementation deviates from the typical sequential prediction approach.
+    # instead of averaging the log likelihood over a continuously extended predicted sequence
+    # (where each subsequent prediction is conditioned on prior predictions in the sequence),
+    # it averages the log likelihoods for individual, non-sequential token predictions in the batch.
+    # each input in the batch is used only once to predict the next token,
+    # without reusing the same input for multiple sequential predictions.
+    def comp_perplexity(logits):
+        logits = logits[:,-1,:]
+        probabilities = nn.functional.softmax(logits, dim=1)
+        prediction_max, _ = torch.max(probabilities, dim=1)
+        log_likelihood = torch.log(prediction_max)
+        sum_log = torch.sum(log_likelihood).item()
+        t = float(log_likelihood.numel())
+        perplexity = math.exp(sum_log * (-1.0) / t)
+        return perplexity
+
 
     class LitMambaDNA(L.LightningModule):
         def __init__(self, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
@@ -506,9 +524,11 @@ def mamba_training(ckpt_path=None):
             loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
             
             accuracy = comp_next_token_pred_acc(outpts, trgts)
+            perplexity = comp_perplexity(outpts)
             #print("batch_idx {}: Loss {:.6f}; Masked prediction accuracy {:.4f}%".format(batch_idx, loss.item(), accuracy*100.0))
             self.log("train_loss", loss.item(), sync_dist=True)
             self.log("train_accuracy", accuracy*100.0, sync_dist=True, prog_bar=True)
+            self.log("train_perplexity", perplexity, sync_dist=True, prog_bar=True)
             return loss
 
         def val_dataloader(self):
@@ -525,8 +545,10 @@ def mamba_training(ckpt_path=None):
             outpts = self(inpts)
             
             accuracy = comp_next_token_pred_acc(outpts, trgts)
+            perplexity = comp_perplexity(outpts)
             #print("batch_idx {} validataion: Masked prediction accuracy {:.4f}%".format(batch_idx, accuracy*100.0))
             self.log("val_accuracy", accuracy*100.0, sync_dist=True)
+            self.log("val_perplexity", perplexity, sync_dist=True)
 
         def configure_optimizers(self):
             optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
