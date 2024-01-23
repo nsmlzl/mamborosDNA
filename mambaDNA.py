@@ -137,6 +137,8 @@ def complement(tokens, tokenizer):
 
 class GenomeIterator:
     def __init__(self, numpy_path, ds_entries, rnd_seed=0):
+        self.max_n_count = 0
+
         self.gdata = {}
         dtype = np.dtype([('key', 'U25'), ('start', 'int_'), ('end', 'int_')])
         self.entry_ranges = np.empty(len(ds_entries), dtype=dtype)
@@ -173,6 +175,7 @@ class GenomeIterator:
     def config(self, tokenizer, seq_len):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
+        self.n_token_id = self.tokenizer.added_tokens_encoder['N']
 
     def reseed(self):
         world_size = torch.distributed.get_world_size()
@@ -187,7 +190,16 @@ class GenomeIterator:
         assert self.seq_len != None, "Sequence length need to be set; run config before usage"
 
         rnd_idx = self.rnd_gen.randint(0, self.len - 1)
-        return self.get_seq(rnd_idx)
+        inpt = targt = None
+        # prevent infinite loops with for loop
+        for _ in range(10):
+            inpt, targt = self.get_seq(rnd_idx)
+            n_count = torch.sum(targt == self.n_token_id).item()
+            if n_count <= self.max_n_count:
+                break
+            #else:
+                #print("too many Ns")
+        return inpt, targt
 
     def get_seq(self, idx):
         assert idx >= 0
