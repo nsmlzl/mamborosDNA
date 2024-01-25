@@ -24,6 +24,7 @@ from mamba_ssm.models.config_mamba import MambaConfig
 
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
+from torchmetrics.text import Perplexity
 
 from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
 
@@ -485,22 +486,6 @@ def mamba_training(ckpt_path=None):
         accuracy = corr_pred.sum().item() / target.size(-1)
         return accuracy
 
-    # compute perplexity for a batch of logits:
-    # this implementation deviates from the typical sequential prediction approach.
-    # instead of averaging the log likelihood over a continuously extended predicted sequence
-    # (where each subsequent prediction is conditioned on prior predictions in the sequence),
-    # it averages the log likelihoods for individual, non-sequential token predictions in the batch.
-    # each input in the batch is used only once to predict the next token,
-    # without reusing the same input for multiple sequential predictions.
-    def comp_perplexity(logits, trgts):
-        # compute perplexity only over masked tokens
-        logits = logits[:,-1,:].contiguous()
-        trgts = trgts[:, -1]
-
-        # CrossEntropyLoss computes negative average log likelihood
-        neg_log_likelihood = nn.CrossEntropyLoss()(logits.view(-1, logits.size(-1)), trgts)
-        return math.exp(neg_log_likelihood.double())
-
 
     class LitMambaDNA(L.LightningModule):
         def __init__(self, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
@@ -513,6 +498,9 @@ def mamba_training(ckpt_path=None):
             self.weight_decay = weight_decay
             self.batch_size_train = batch_size_train
             self.batch_size_val = batch_size_val
+
+            self.train_perplexity = Perplexity()
+            self.val_perplexity = Perplexity()
 
             self.save_hyperparameters(ignore=['mambaDNA'])
 
@@ -534,15 +522,19 @@ def mamba_training(ckpt_path=None):
             # print("inpts: {}, trgts: {}, outpts: {}".format(inpts.size(), trgts.size(), outpts.size()))
             loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
 
+            # compute perplexity solely for masked tokens
+            self.train_perplexity(outpts[:,-1,:].view(-1,1,outpts.size(-1)), trgts[:,-1].view(-1,1))
+
             accuracy = comp_next_token_pred_acc(outpts, trgts)
             #print("batch_idx {}: Loss {:.6f}; Masked prediction accuracy {:.4f}%".format(batch_idx, loss.item(), accuracy*100.0))
             self.log("train_loss", loss.item(), sync_dist=True)
             self.log("train_accuracy", accuracy*100.0, sync_dist=True, prog_bar=True)
-            # compute perplexity solely on one GPU; compute no average
-            if torch.distributed.get_rank() == 0:
-                perplexity = comp_perplexity(outpts, trgts)
-                self.log("train_perplexity", perplexity, prog_bar=True)
+
             return loss
+
+        def on_train_batch_end(self, outputs, batch, batch_idx):
+            self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
+            self.train_perplexity.reset()
 
         def val_dataloader(self):
             seed = torch.distributed.get_rank()
@@ -557,12 +549,16 @@ def mamba_training(ckpt_path=None):
             inpts, trgts = batch
             outpts = self(inpts)
             
+            # compute perplexity solely for masked tokens
+            self.val_perplexity(outpts[:,-1,:].view(-1,1,outpts.size(-1)), trgts[:,-1].view(-1,1))
+
             accuracy = comp_next_token_pred_acc(outpts, trgts)
             #print("batch_idx {} validataion: Masked prediction accuracy {:.4f}%".format(batch_idx, accuracy*100.0))
             self.log("val_accuracy", accuracy*100.0, sync_dist=True)
-            if torch.distributed.get_rank() == 0:
-                perplexity = comp_perplexity(outpts, trgts)
-                self.log("val_perplexity", perplexity)
+
+        def on_validation_batch_end(self, outputs, batch, batch_idx):
+            self.log("val_perplexity", self.val_perplexity.compute())
+            self.val_perplexity.reset()
 
         def configure_optimizers(self):
             optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
