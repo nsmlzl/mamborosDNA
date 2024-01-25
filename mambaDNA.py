@@ -582,7 +582,7 @@ def mamba_training(ckpt_path=None):
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
     trainer = L.Trainer(max_epochs=1, limit_train_batches=1000, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
-                        devices=8, accelerator="gpu", log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False, profiler='simple')
+                        devices=4, accelerator="gpu", log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False) #, profiler='simple')
     trainer.fit(mambaDNA)
 
 
