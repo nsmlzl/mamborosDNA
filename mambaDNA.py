@@ -225,14 +225,14 @@ class GenomeIterator:
         tokens = self.gdata[key][0]
         if not(rev_compl):
             right_bound = local_idx + 1
-            left_bound = right_bound - self.seq_len
+            left_bound = right_bound - self.seq_len - 1
             if left_bound < 0:
                 left_bound = 0
             tokens = tokens[left_bound:right_bound]
         else:
             # left and right bounds are switched due to reverse orientation
             right_bound = local_idx
-            left_bound = right_bound + self.seq_len
+            left_bound = right_bound + self.seq_len + 1
             if left_bound > tokens.size:
                 left_bound = tokens.size
             tokens = tokens[right_bound:left_bound][::-1]
@@ -244,19 +244,19 @@ class GenomeIterator:
         # print(seq_str, len(seq_str))
 
         # add padding
-        if tokens.size < self.seq_len:
-            padding = np.full((self.seq_len - tokens.size), self.tokenizer.pad_token_id, dtype=np.byte)
+        if tokens.size < self.seq_len + 1:
+            padding = np.full((self.seq_len + 1 - tokens.size), self.tokenizer.pad_token_id, dtype=np.byte)
             tokens = np.hstack((padding, tokens))
 
-        assert tokens.size <= self.seq_len
+        assert tokens.size <= self.seq_len + 1
 
         # TODO use CharTensor instead of LongTensor
-        inpt = torch.from_numpy(tokens).to(torch.long).clone()
+        inpt = torch.from_numpy(tokens).to(torch.long)[:-1].clone()
+        targt = torch.from_numpy(tokens).to(torch.long)[1:].clone()
+        assert inpt.numel() == self.seq_len, "expected a inpt tensor with {} elements; got {}".format(self.seq_len, inpt.numel())
+        assert targt.numel() == self.seq_len, "expected a targt tensor with {} elements; got {}".format(self.seq_len, targt.numel())
 
-        # mask
-        target = inpt.clone()
-        inpt[-1] = self.tokenizer.mask_token_id
-        return inpt, target
+        return inpt, targt
 
 
     # validate T2T dataset; check if correct tokens are returned for predefined indices
@@ -315,25 +315,25 @@ class GenomeIterator:
             print("tokens match!")
 
         # forward
-        check(5, "[PAD]"*24 + "CACCC" + "[MASK]", "[PAD]"*24 + "CACCC" + "T")
-        check(248387322, "GGGTTAGGGTTAGGGTTAGGGTTAGGGTT" + "[MASK]", "GGGTTAGGGTTAGGGTTAGGGTTAGGGTT" + "A")
-        check(1067810436, "[PAD]"*5 + "CCTAACCCTAACCCTAACCCCTAA" + "[MASK]", "[PAD]"*5 + "CCTAACCCTAACCCTAACCCCTAA" + "C")
-        check(1228377838, "GGGTTAGGGTTAGGGGTTAGGGTTAGGGT" + "[MASK]", "GGGTTAGGGTTAGGGGTTAGGGTTAGGGT" + "T")
-        check(2786358510, "CTAACCCTAACCCTAACCCTAACCCTAAC" + "[MASK]", "CTAACCCTAACCCTAACCCTAACCCTAAC" + "C")
-        check(2848818478, "AGGGTTAGGGTTAGGGTTAGGGTTAGGGT" + "[MASK]", "AGGGTTAGGGTTAGGGTTAGGGTTAGGGT" + "T")
+        check(5, "[PAD]"*25 + "CACCC", "[PAD]"*24 + "CACCCT")
+        check(248387322, "AGGGTTAGGGTTAGGGTTAGGGTTAGGGTT", "GGGTTAGGGTTAGGGTTAGGGTTAGGGTTA")
+        check(1067810436, "[PAD]"*6 + "CCTAACCCTAACCCTAACCCCTAA", "[PAD]"*5 + "CCTAACCCTAACCCTAACCCCTAAC")
+        check(1228377838, "AGGGTTAGGGTTAGGGGTTAGGGTTAGGGT", "GGGTTAGGGTTAGGGGTTAGGGTTAGGGTT")
+        check(2786358510, "CCTAACCCTAACCCTAACCCTAACCCTAAC", "CTAACCCTAACCCTAACCCTAACCCTAACC")
+        check(2848818478, "TAGGGTTAGGGTTAGGGTTAGGGTTAGGGT", "AGGGTTAGGGTTAGGGTTAGGGTTAGGGTT")
         # reverse complement
         offset = 2848818499
-        check((5 + offset), "GTTAGGGTTAGGGTTAGGGGTTAGGGTTT" + "[MASK]", "GTTAGGGTTAGGGTTAGGGGTTAGGGTTT" + "A")
-        check(248387322 + offset, "[PAD]"*24 + "AACCC" + "[MASK]", "[PAD]"*24 + "AACCC" + "T")
-        check(1067810436 + offset, "GTTAGGAGGGTTAGGGGATTAGGGTTAGG" + "[MASK]", "GTTAGGAGGGTTAGGGGATTAGGGTTAGG" + "G")
-        check(1228377838 + offset, "[PAD]"*28 + "T" + "[MASK]", "[PAD]"*28 + "T" + "A")
-        check(2786358510 + offset, "GTTAGGGTTAGGGTTAGGGTTAGGGTTAG" + "[MASK]", "GTTAGGGTTAGGGTTAGGGTTAGGGTTAG" + "G")
-        check(2848818478 + offset, "[PAD]"*9 + "CTAACCCTAACCCTAACCCT" + "[MASK]", "[PAD]"*9 + "CTAACCCTAACCCTAACCCT" + "A")
+        check((5 + offset), "GGTTAGGGTTAGGGTTAGGGGTTAGGGTTT", "GTTAGGGTTAGGGTTAGGGGTTAGGGTTTA")
+        check(248387322 + offset, "[PAD]"*25 + "AACCC", "[PAD]"*24 + "AACCCT")
+        check(1067810436 + offset, "GGTTAGGAGGGTTAGGGGATTAGGGTTAGG", "GTTAGGAGGGTTAGGGGATTAGGGTTAGGG")
+        check(1228377838 + offset, "[PAD]"*29 + "T", "[PAD]"*28 + "TA")
+        check(2786358510 + offset, "GGTTAGGGTTAGGGTTAGGGTTAGGGTTAG", "GTTAGGGTTAGGGTTAGGGTTAGGGTTAGG")
+        check(2848818478 + offset, "[PAD]"*10 + "CTAACCCTAACCCTAACCCT", "[PAD]"*9 + "CTAACCCTAACCCTAACCCTA")
         # check if nothing was modified
-        check(2848818478, "AGGGTTAGGGTTAGGGTTAGGGTTAGGGT" + "[MASK]", "AGGGTTAGGGTTAGGGTTAGGGTTAGGGT" + "T")
-        check(5, "[PAD]"*24 + "CACCC" + "[MASK]", "[PAD]"*24 + "CACCC" + "T")
-        check(2848818478 + offset, "[PAD]"*9 + "CTAACCCTAACCCTAACCCT" + "[MASK]", "[PAD]"*9 + "CTAACCCTAACCCTAACCCT" + "A")
-        check((5 + offset), "GTTAGGGTTAGGGTTAGGGGTTAGGGTTT" + "[MASK]", "GTTAGGGTTAGGGTTAGGGGTTAGGGTTT" + "A")
+        check(2848818478, "TAGGGTTAGGGTTAGGGTTAGGGTTAGGGT", "AGGGTTAGGGTTAGGGTTAGGGTTAGGGTT")
+        check(5, "[PAD]"*25 + "CACCC", "[PAD]"*24 + "CACCCT")
+        check(2848818478 + offset, "[PAD]"*10 + "CTAACCCTAACCCTAACCCT", "[PAD]"*9 + "CTAACCCTAACCCTAACCCTA")
+        check((5 + offset), "GGTTAGGGTTAGGGTTAGGGGTTAGGGTTT", "GTTAGGGTTAGGGTTAGGGGTTAGGGTTTA")
 
         print("Succesfull validation of T2T dataset access!")
 
@@ -516,9 +516,8 @@ def mamba_training(ckpt_path=None):
             loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
             self.log("train_loss", loss.item(), sync_dist=True)
 
-            # compute accuracy and perplexity solely over masked tokens
-            self.train_accuracy(outpts[:,-1,:].view(-1,outpts.size(-1)), trgts[:,-1].view(-1))
-            self.train_perplexity(outpts[:,-1,:].view(-1,1,outpts.size(-1)), trgts[:,-1].view(-1,1))
+            self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+            #self.train_perplexity(outpts, trgts)
 
             return loss
 
@@ -526,8 +525,8 @@ def mamba_training(ckpt_path=None):
             # log and reset at end of step
             self.log("train_accuracy", self.train_accuracy.compute()*100.0, prog_bar=True)
             self.train_accuracy.reset()
-            self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
-            self.train_perplexity.reset()
+            #self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
+            #self.train_perplexity.reset()
 
         def val_dataloader(self):
             seed = torch.distributed.get_rank()
@@ -542,16 +541,15 @@ def mamba_training(ckpt_path=None):
             inpts, trgts = batch
             outpts = self(inpts)
             
-            # compute accuracy and perplexity solely over masked tokens
-            self.val_accuracy(outpts[:,-1,:].view(-1,outpts.size(-1)), trgts[:,-1].view(-1))
-            self.val_perplexity(outpts[:,-1,:].view(-1,1,outpts.size(-1)), trgts[:,-1].view(-1,1))
+            self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+            #self.val_perplexity(outpts, trgts)
 
         def on_validation_batch_end(self, outputs, batch, batch_idx):
             # log and reset at end of step
             self.log("val_accuracy", self.val_accuracy.compute()*100.0)
             self.val_accuracy.reset()
-            self.log("val_perplexity", self.val_perplexity.compute())
-            self.val_perplexity.reset()
+            #self.log("val_perplexity", self.val_perplexity.compute())
+            #self.val_perplexity.reset()
 
         def configure_optimizers(self):
             optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
