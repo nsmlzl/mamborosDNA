@@ -24,6 +24,7 @@ from mamba_ssm.models.config_mamba import MambaConfig
 
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
+from torchmetrics.classification import MulticlassAccuracy
 from torchmetrics.text import Perplexity
 
 from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
@@ -477,16 +478,6 @@ def mamba_training(ckpt_path=None):
     model_state_path = model_state_dir + "/" + "12-28-2023-1"
 
 
-    # compute next-token prediction accuracy
-    def comp_next_token_pred_acc(prediction, target):
-        prediction = prediction[:,-1,:]
-        target = target[:,-1]
-        _, pred_labels = torch.max(prediction, 1)
-        corr_pred = (pred_labels == target)
-        accuracy = corr_pred.sum().item() / target.size(-1)
-        return accuracy
-
-
     class LitMambaDNA(L.LightningModule):
         def __init__(self, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
             super().__init__()
@@ -499,6 +490,8 @@ def mamba_training(ckpt_path=None):
             self.batch_size_train = batch_size_train
             self.batch_size_val = batch_size_val
 
+            self.train_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
+            self.val_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
             self.train_perplexity = Perplexity()
             self.val_perplexity = Perplexity()
 
@@ -521,18 +514,18 @@ def mamba_training(ckpt_path=None):
             outpts = self(inpts)
             # print("inpts: {}, trgts: {}, outpts: {}".format(inpts.size(), trgts.size(), outpts.size()))
             loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-
-            # compute perplexity solely for masked tokens
-            self.train_perplexity(outpts[:,-1,:].view(-1,1,outpts.size(-1)), trgts[:,-1].view(-1,1))
-
-            accuracy = comp_next_token_pred_acc(outpts, trgts)
-            #print("batch_idx {}: Loss {:.6f}; Masked prediction accuracy {:.4f}%".format(batch_idx, loss.item(), accuracy*100.0))
             self.log("train_loss", loss.item(), sync_dist=True)
-            self.log("train_accuracy", accuracy*100.0, sync_dist=True, prog_bar=True)
+
+            # compute accuracy and perplexity solely over masked tokens
+            self.train_accuracy(outpts[:,-1,:].view(-1,outpts.size(-1)), trgts[:,-1].view(-1))
+            self.train_perplexity(outpts[:,-1,:].view(-1,1,outpts.size(-1)), trgts[:,-1].view(-1,1))
 
             return loss
 
         def on_train_batch_end(self, outputs, batch, batch_idx):
+            # log and reset at end of step
+            self.log("train_accuracy", self.train_accuracy.compute()*100.0, prog_bar=True)
+            self.train_accuracy.reset()
             self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
             self.train_perplexity.reset()
 
@@ -549,14 +542,14 @@ def mamba_training(ckpt_path=None):
             inpts, trgts = batch
             outpts = self(inpts)
             
-            # compute perplexity solely for masked tokens
+            # compute accuracy and perplexity solely over masked tokens
+            self.val_accuracy(outpts[:,-1,:].view(-1,outpts.size(-1)), trgts[:,-1].view(-1))
             self.val_perplexity(outpts[:,-1,:].view(-1,1,outpts.size(-1)), trgts[:,-1].view(-1,1))
 
-            accuracy = comp_next_token_pred_acc(outpts, trgts)
-            #print("batch_idx {} validataion: Masked prediction accuracy {:.4f}%".format(batch_idx, accuracy*100.0))
-            self.log("val_accuracy", accuracy*100.0, sync_dist=True)
-
         def on_validation_batch_end(self, outputs, batch, batch_idx):
+            # log and reset at end of step
+            self.log("val_accuracy", self.val_accuracy.compute()*100.0)
+            self.val_accuracy.reset()
             self.log("val_perplexity", self.val_perplexity.compute())
             self.val_perplexity.reset()
 
@@ -571,7 +564,7 @@ def mamba_training(ckpt_path=None):
     tokenizer = DNATokenizer()
     mamba_config = MambaConfig(d_model=embed_dim, n_layer=n_layers, vocab_size=tokenizer.vocab_size,
                                ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
-                               pad_vocab_size_multiple=8)
+                               pad_vocab_size_multiple=1)
     if ckpt_path == None:
         mambaDNA = LitMambaDNA(mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val)
     else:
