@@ -191,16 +191,21 @@ class GenomeIterator:
         assert self.tokenizer != None, "Tokenizer need to be set; run config() before usage"
         assert self.seq_len != None, "Sequence length need to be set; run config before usage"
 
-        rnd_idx = self.rnd_gen.randint(0, self.len - 1)
         inpt = targt = None
         # prevent infinite loops with for loop
-        for _ in range(10):
+        max_samplings = 9
+        for i in range(max_samplings + 1):
+            rnd_idx = self.rnd_gen.randint(0, self.len - 1)
             inpt, targt = self.get_seq(rnd_idx)
             n_count = torch.sum(targt == self.n_token_id).item()
             if n_count <= self.max_n_count:
                 break
             #else:
                 #print("too many Ns")
+
+        n_count = torch.sum(targt == self.n_token_id).item()
+        if n_count > 0:
+            print("WARNING: Training input contains {} Ns".format(n_count))
         return inpt, targt
 
     def get_seq(self, idx):
@@ -518,6 +523,9 @@ def mamba_training(ckpt_path=None):
 
             self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
             #self.train_perplexity(outpts, trgts)
+
+            if self.trainer.global_rank == 0:
+                self.log("train_perplexity", torch.exp(loss).double(), prog_bar=True, rank_zero_only=True)
 
             return loss
 
