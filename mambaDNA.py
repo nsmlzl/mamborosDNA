@@ -466,14 +466,14 @@ class GenomeDataset(torch.utils.data.IterableDataset):
 def mamba_training(ckpt_path=None):
     # parameters
     embed_dim = 128
-    n_layers = 6
+    n_layers = 12
     dropout = 0             # original Mamba did not use dropout
     # training
     # reproducing sec 4.3.2 with 1.3-1.4M parameters, 330B token pretraining
     seq_len = 1024
-    batch_size_train = 1024
+    batch_size_train = 512
     batches_per_step = 16
-    batch_size_val = 1024
+    batch_size_val = 2048
     n_steps = 5 # 20000
     # optimizer
     lr = 8e-3
