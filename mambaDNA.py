@@ -1,5 +1,6 @@
 # tested with mamba-ssm v1.1.1, causal-conv1d v1.1.1, transformers v4.36.2,
 # torch v2.1.2, pytorch-lightning v2.1.3, pyfaidx 0.7.2.2
+# requires development branch of torchmetrics (optimized perplexity metric)
 
 from zipfile import ZipFile
 from io import BytesIO
@@ -525,10 +526,7 @@ def mamba_training(ckpt_path=None):
                 raise ValueError("Loss NaN")
 
             self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-            #self.train_perplexity(outpts, trgts)
-
-            if self.trainer.global_rank == 0:
-                self.log("train_perplexity", torch.exp(loss).double(), prog_bar=True, rank_zero_only=True)
+            self.train_perplexity(outpts, trgts)
 
             return loss
 
@@ -536,8 +534,8 @@ def mamba_training(ckpt_path=None):
             # log and reset at end of step
             self.log("train_accuracy", self.train_accuracy.compute()*100.0, prog_bar=True)
             self.train_accuracy.reset()
-            #self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
-            #self.train_perplexity.reset()
+            self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
+            self.train_perplexity.reset()
 
         def val_dataloader(self):
             seed = torch.distributed.get_rank()
@@ -553,14 +551,14 @@ def mamba_training(ckpt_path=None):
             outpts = self(inpts)
             
             self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-            #self.val_perplexity(outpts, trgts)
+            self.val_perplexity(outpts, trgts)
 
         def on_validation_batch_end(self, outputs, batch, batch_idx):
             # log and reset at end of step
             self.log("val_accuracy", self.val_accuracy.compute()*100.0)
             self.val_accuracy.reset()
-            #self.log("val_perplexity", self.val_perplexity.compute())
-            #self.val_perplexity.reset()
+            self.log("val_perplexity", self.val_perplexity.compute())
+            self.val_perplexity.reset()
 
         def configure_optimizers(self):
             optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
