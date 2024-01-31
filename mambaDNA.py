@@ -1,6 +1,5 @@
 # tested with mamba-ssm v1.1.1, causal-conv1d v1.1.1, transformers v4.36.2,
-# torch v2.1.2, pytorch-lightning v2.1.3, pyfaidx 0.7.2.2
-# requires development branch of torchmetrics (optimized perplexity metric)
+# torch v2.1.2, pytorch-lightning v2.1.3, torchmetrics v1.2.1, pyfaidx 0.7.2.2
 
 from zipfile import ZipFile
 from io import BytesIO
@@ -25,8 +24,8 @@ from mamba_ssm.models.config_mamba import MambaConfig
 
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
+from torchmetrics import Metric
 from torchmetrics.classification import MulticlassAccuracy
-from torchmetrics.text import Perplexity
 
 from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
 
@@ -463,6 +462,30 @@ class GenomeDataset(torch.utils.data.IterableDataset):
         GenomeDataset.create_np_data(GenomeDataset.yeast_path, GenomeDataset.numpy_path)
 
 
+# inspired by HyenaDNA and torchmetrics
+# https://github.com/HazyResearch/hyena-dna/blob/d553021b483b82980aa4b868b37ec2d4332e198a/src/tasks/torchmetrics.py#L24-L73
+# https://github.com/Lightning-AI/torchmetrics/blob/a68455afb9041d1d32c1d6546897fee416abdc41/src/torchmetrics/text/perplexity.py#L28-L88
+class FastPerplexity(Metric):
+    is_differentiable = True
+    higher_is_better = False
+    full_state_update = False
+    total_log_probs: torch.Tensor
+    count: torch.Tensor
+
+    def __init__(self):
+        super().__init__()
+        self.add_state("total_log_probs", default=torch.tensor(0.0, dtype=torch.float64), dist_reduce_fx="sum")
+        self.add_state("count", default=torch.tensor(0, dtype=torch.int64), dist_reduce_fx="sum")
+
+    def update(self, loss):
+        # expect all GPUs to compute loss over same number of elements
+        self.total_log_probs += loss.double()
+        self.count += 1
+
+    def compute(self):
+        return torch.exp(self.total_log_probs / self.count.double())
+
+
 def mamba_training(ckpt_path=None):
     # parameters
     embed_dim = 128
@@ -498,8 +521,8 @@ def mamba_training(ckpt_path=None):
 
             self.train_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
             self.val_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
-            self.train_perplexity = Perplexity()
-            self.val_perplexity = Perplexity()
+            self.train_perplexity = FastPerplexity()
+            self.val_perplexity = FastPerplexity()
 
             self.save_hyperparameters(ignore=['mambaDNA'])
 
@@ -526,7 +549,7 @@ def mamba_training(ckpt_path=None):
                 raise ValueError("Loss NaN")
 
             self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-            self.train_perplexity(outpts, trgts)
+            self.train_perplexity(loss)
 
             return loss
 
@@ -549,9 +572,10 @@ def mamba_training(ckpt_path=None):
         def validation_step(self, batch, batch_idx):
             inpts, trgts = batch
             outpts = self(inpts)
+            loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
             
             self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-            self.val_perplexity(outpts, trgts)
+            self.val_perplexity(loss)
 
         def on_validation_batch_end(self, outputs, batch, batch_idx):
             # log and reset at end of step
