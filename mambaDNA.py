@@ -486,7 +486,10 @@ class FastPerplexity(Metric):
         return torch.exp(self.total_log_probs / self.count.double())
 
 
-def mamba_training(ckpt_path=None):
+def mamba_training(args):
+    ckpt_path = args.ckpt_path
+    dataset = args.dataset
+
     # parameters
     embed_dim = 128
     n_layers = 12
@@ -508,8 +511,18 @@ def mamba_training(ckpt_path=None):
 
 
     class LitMambaDNA(L.LightningModule):
-        def __init__(self, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
+        def __init__(self, dataset, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
             super().__init__()
+            self.dataset = dataset
+            if self.dataset == "T2T":
+                self.training_entries = GenomeDataset.training_entries_T2T
+                self.validation_entries = GenomeDataset.validation_entries_T2T
+            elif self.dataset == "yeast":
+                self.training_entries = GenomeDataset.training_entries_yeast
+                self.validation_entries = GenomeDataset.validation_entries_yeast
+            else:
+                raise ValueError("unknown dataset: {}".format(self.dataset))
+
             self.mambaDNA = MambaLMHeadModel(mamba_config)
             self.loss_fn = nn.CrossEntropyLoss()
 
@@ -526,12 +539,13 @@ def mamba_training(ckpt_path=None):
 
             self.save_hyperparameters(ignore=['mambaDNA'])
 
+
         def forward(self, inpts):
             return self.mambaDNA(inpts).logits
 
         def train_dataloader(self):
             seed = torch.distributed.get_rank()
-            train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries_yeast, seed)
+            train_iter = GenomeIterator(GenomeDataset.numpy_path, self.training_entries, seed)
             train_ds = GenomeDataset(train_iter)
 
             tokenizer = DNATokenizer()
@@ -562,7 +576,7 @@ def mamba_training(ckpt_path=None):
 
         def val_dataloader(self):
             seed = torch.distributed.get_rank()
-            val_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.validation_entries_yeast, seed)
+            val_iter = GenomeIterator(GenomeDataset.numpy_path, self.validation_entries, seed)
             val_ds = GenomeDataset(val_iter)
 
             tokenizer = DNATokenizer()
@@ -597,7 +611,7 @@ def mamba_training(ckpt_path=None):
                                ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
                                pad_vocab_size_multiple=1)
     if ckpt_path == None:
-        mambaDNA = LitMambaDNA(mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val)
+        mambaDNA = LitMambaDNA(dataset, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val)
     else:
         print("Loading mambaDNA from checkpoint {}".format(ckpt_path))
         mambaDNA = LitMambaDNA.load_from_checkpoint(ckpt_path, map_location="cpu")
@@ -617,21 +631,24 @@ def main(args):
         GenomeIterator.validate_T2T_ds()
     if args.validate_tokenizer:
         DNATokenizer.validate()
-    if args.run_training == True:
-        mamba_training();
-    elif args.run_training:
-        # only pass ckpt_path when actually set
-        mamba_training(ckpt_path=args.run_training)
+    if args.subcommand=='train':
+        mamba_training(args)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog="MambaDNA")
+    subparsers = parser.add_subparsers(dest='subcommand')
+
     parser.add_argument("--get_dataset_T2T", action="store_true", help="download and precompute T2T dataset")
     parser.add_argument("--get_dataset_yeast", action="store_true", help="download and precompute yeast dataset")
     parser.add_argument("--validate_dataset", action="store_true", help="validate training/validation entry sets and access of T2T dataset")
     parser.add_argument("--validate_tokenizer", action="store_true", help="validate tokenizer")
-    parser.add_argument("-r", "--run_training", nargs="?", const=True, default=False, metavar="path/to/checkpoint.chpt",
-                        help="run training; optionally provide a path to a checkpoint file")
+
+    train_sp = subparsers.add_parser("train", help="run training")
+    train_sp.add_argument("--ckpt_path", default=None, metavar="path/to/checkpoint.chpt",
+                          help="provide optional checkpoint file to load model from")
+    train_sp.add_argument("--dataset", choices=['T2T', 'yeast'], default='T2T',
+                          help="select training dataset")
     args = parser.parse_args()
 
     main(args)
