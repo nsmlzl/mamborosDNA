@@ -491,8 +491,8 @@ def mamba_training(args):
     dataset = args.dataset
 
     # parameters
-    embed_dim = 128
-    n_layers = 12
+    n_layer = 12
+    d_model = 128
     dropout = 0             # original Mamba did not use dropout
     # training
     # reproducing sec 4.3.2 with 1.3-1.4M parameters, 330B token pretraining
@@ -511,7 +511,7 @@ def mamba_training(args):
 
 
     class LitMambaDNA(L.LightningModule):
-        def __init__(self, dataset, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
+        def __init__(self, dataset, n_layer, d_model, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
             super().__init__()
             self.dataset = dataset
             if self.dataset == "T2T":
@@ -523,6 +523,10 @@ def mamba_training(args):
             else:
                 raise ValueError("unknown dataset: {}".format(self.dataset))
 
+            self.tokenizer = DNATokenizer()
+            mamba_config = MambaConfig(n_layer=n_layer, d_model=d_model, vocab_size=self.tokenizer.vocab_size,
+                                       ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
+                                       pad_vocab_size_multiple=1)
             self.mambaDNA = MambaLMHeadModel(mamba_config)
             self.loss_fn = nn.CrossEntropyLoss()
 
@@ -548,8 +552,7 @@ def mamba_training(args):
             train_iter = GenomeIterator(GenomeDataset.numpy_path, self.training_entries, seed)
             train_ds = GenomeDataset(train_iter)
 
-            tokenizer = DNATokenizer()
-            train_ds.config(tokenizer, self.seq_len)
+            train_ds.config(self.tokenizer, self.seq_len)
             return DataLoader(train_ds, batch_size=self.batch_size_train)
 
         def training_step(self, batch, batch_idx):
@@ -579,8 +582,7 @@ def mamba_training(args):
             val_iter = GenomeIterator(GenomeDataset.numpy_path, self.validation_entries, seed)
             val_ds = GenomeDataset(val_iter)
 
-            tokenizer = DNATokenizer()
-            val_ds.config(tokenizer, self.seq_len)
+            val_ds.config(self.tokenizer, self.seq_len)
             return DataLoader(val_ds, batch_size=self.batch_size_val)
 
         def validation_step(self, batch, batch_idx):
@@ -606,12 +608,9 @@ def mamba_training(args):
 
     torch.set_float32_matmul_precision('medium')
 
-    tokenizer = DNATokenizer()
-    mamba_config = MambaConfig(d_model=embed_dim, n_layer=n_layers, vocab_size=tokenizer.vocab_size,
-                               ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
-                               pad_vocab_size_multiple=1)
     if ckpt_path == None:
-        mambaDNA = LitMambaDNA(dataset, mamba_config, seq_len, lr, weight_decay, batch_size_train, batch_size_val)
+        mambaDNA = LitMambaDNA(dataset, n_layer, d_model, seq_len, lr, weight_decay,
+                               batch_size_train, batch_size_val)
     else:
         print("Loading mambaDNA from checkpoint {}".format(ckpt_path))
         mambaDNA = LitMambaDNA.load_from_checkpoint(ckpt_path, map_location="cpu")
