@@ -487,7 +487,8 @@ class FastPerplexity(Metric):
 
 
 class LitMambaDNA(L.LightningModule):
-    def __init__(self, dataset, n_layer, d_model, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
+    def __init__(self, dataset, n_layer, d_model, seq_len, lr, weight_decay, batch_size_train,
+                 batch_size_val, gpu_cnt):
         super().__init__()
         self.dataset = dataset
         if self.dataset == "T2T":
@@ -584,35 +585,40 @@ def mamba_training(args):
     ckpt_path = args.ckpt_path
     dataset = args.dataset
 
-    # parameters
     # reproducing sec 4.3.2 with 1.3-1.4M parameters, 330B token pretraining
+    # model parameters
     n_layer = 12
     d_model = 128
-    #dropout = 0             # original Mamba did not use dropout
+
     # training
+    gpu_cnt = 4
+    limit_train_batches = 1000
+
     seq_len = 1024
     batch_size_train = 512
-    #batches_per_step = 16
     batch_size_val = 2048
+    #batches_per_step = 16
     #n_steps = 20000
+    #dropout = 0             # original Mamba did not use dropout
+
     # optimizer
     lr = 8e-3
-    #epsilon = 0.2 # ???
     weight_decay = 0.1
+    #epsilon = 0.2 # ???
 
 
     torch.set_float32_matmul_precision('medium')
 
     if ckpt_path == None:
         mambaDNA = LitMambaDNA(dataset, n_layer, d_model, seq_len, lr, weight_decay,
-                               batch_size_train, batch_size_val)
+                               batch_size_train, batch_size_val, gpu_cnt)
     else:
         print("Loading mambaDNA from checkpoint {}".format(ckpt_path))
         mambaDNA = LitMambaDNA.load_from_checkpoint(ckpt_path, map_location="cpu")
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
-    trainer = L.Trainer(max_epochs=1, limit_train_batches=1000, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
-                        devices=4, accelerator="gpu", precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False) #, profiler='simple')
+    trainer = L.Trainer(max_epochs=1, limit_train_batches=limit_train_batches, limit_val_batches=int(1), check_val_every_n_epoch=None, val_check_interval=5,
+                        devices=gpu_cnt, accelerator="gpu", precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp", use_distributed_sampler=False) #, profiler='simple')
     trainer.fit(mambaDNA)
 
 
