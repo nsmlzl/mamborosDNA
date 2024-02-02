@@ -486,125 +486,120 @@ class FastPerplexity(Metric):
         return torch.exp(self.total_log_probs / self.count.double())
 
 
+class LitMambaDNA(L.LightningModule):
+    def __init__(self, dataset, n_layer, d_model, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
+        super().__init__()
+        self.dataset = dataset
+        if self.dataset == "T2T":
+            self.training_entries = GenomeDataset.training_entries_T2T
+            self.validation_entries = GenomeDataset.validation_entries_T2T
+        elif self.dataset == "yeast":
+            self.training_entries = GenomeDataset.training_entries_yeast
+            self.validation_entries = GenomeDataset.validation_entries_yeast
+        else:
+            raise ValueError("unknown dataset: {}".format(self.dataset))
+
+        self.tokenizer = DNATokenizer()
+        mamba_config = MambaConfig(n_layer=n_layer, d_model=d_model, vocab_size=self.tokenizer.vocab_size,
+                                   ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
+                                   pad_vocab_size_multiple=1)
+        self.mambaDNA = MambaLMHeadModel(mamba_config)
+        self.loss_fn = nn.CrossEntropyLoss()
+
+        self.seq_len = seq_len
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.batch_size_train = batch_size_train
+        self.batch_size_val = batch_size_val
+
+        self.train_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
+        self.val_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
+        self.train_perplexity = FastPerplexity()
+        self.val_perplexity = FastPerplexity()
+
+        self.save_hyperparameters(ignore=['mambaDNA'])
+
+    def forward(self, inpts):
+        return self.mambaDNA(inpts).logits
+
+    def train_dataloader(self):
+        seed = torch.distributed.get_rank()
+        train_iter = GenomeIterator(GenomeDataset.numpy_path, self.training_entries, seed)
+        train_ds = GenomeDataset(train_iter)
+
+        train_ds.config(self.tokenizer, self.seq_len)
+        return DataLoader(train_ds, batch_size=self.batch_size_train)
+
+    def training_step(self, batch, batch_idx):
+        inpts, trgts = batch
+        outpts = self(inpts)
+        # print("inpts: {}, trgts: {}, outpts: {}".format(inpts.size(), trgts.size(), outpts.size()))
+        loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        self.log("train_loss", loss.item(), sync_dist=True)
+
+        if math.isnan(loss.double()):
+            raise ValueError("Loss NaN")
+
+        self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        self.train_perplexity(loss)
+        return loss
+
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        # log and reset at end of step
+        self.log("train_accuracy", self.train_accuracy.compute()*100.0, prog_bar=True)
+        self.train_accuracy.reset()
+        self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
+        self.train_perplexity.reset()
+
+    def val_dataloader(self):
+        seed = torch.distributed.get_rank()
+        val_iter = GenomeIterator(GenomeDataset.numpy_path, self.validation_entries, seed)
+        val_ds = GenomeDataset(val_iter)
+
+        val_ds.config(self.tokenizer, self.seq_len)
+        return DataLoader(val_ds, batch_size=self.batch_size_val)
+
+    def validation_step(self, batch, batch_idx):
+        inpts, trgts = batch
+        outpts = self(inpts)
+        loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+
+        self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        self.val_perplexity(loss)
+
+    def on_validation_batch_end(self, outputs, batch, batch_idx):
+        # log and reset at end of step
+        self.log("val_accuracy", self.val_accuracy.compute()*100.0)
+        self.val_accuracy.reset()
+        self.log("val_perplexity", self.val_perplexity.compute())
+        self.val_perplexity.reset()
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
+                                      weight_decay=self.weight_decay) #eps=epsilon,
+        return optimizer
+
+
 def mamba_training(args):
     ckpt_path = args.ckpt_path
     dataset = args.dataset
 
     # parameters
+    # reproducing sec 4.3.2 with 1.3-1.4M parameters, 330B token pretraining
     n_layer = 12
     d_model = 128
-    dropout = 0             # original Mamba did not use dropout
+    #dropout = 0             # original Mamba did not use dropout
     # training
-    # reproducing sec 4.3.2 with 1.3-1.4M parameters, 330B token pretraining
     seq_len = 1024
     batch_size_train = 512
-    batches_per_step = 16
+    #batches_per_step = 16
     batch_size_val = 2048
-    n_steps = 5 # 20000
+    #n_steps = 20000
     # optimizer
     lr = 8e-3
-    # epsilon = 0.2 # ???
+    #epsilon = 0.2 # ???
     weight_decay = 0.1
 
-    model_state_dir = "models"
-    model_state_path = model_state_dir + "/" + "12-28-2023-1"
-
-
-    class LitMambaDNA(L.LightningModule):
-        def __init__(self, dataset, n_layer, d_model, seq_len, lr, weight_decay, batch_size_train, batch_size_val):
-            super().__init__()
-            self.dataset = dataset
-            if self.dataset == "T2T":
-                self.training_entries = GenomeDataset.training_entries_T2T
-                self.validation_entries = GenomeDataset.validation_entries_T2T
-            elif self.dataset == "yeast":
-                self.training_entries = GenomeDataset.training_entries_yeast
-                self.validation_entries = GenomeDataset.validation_entries_yeast
-            else:
-                raise ValueError("unknown dataset: {}".format(self.dataset))
-
-            self.tokenizer = DNATokenizer()
-            mamba_config = MambaConfig(n_layer=n_layer, d_model=d_model, vocab_size=self.tokenizer.vocab_size,
-                                       ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
-                                       pad_vocab_size_multiple=1)
-            self.mambaDNA = MambaLMHeadModel(mamba_config)
-            self.loss_fn = nn.CrossEntropyLoss()
-
-            self.seq_len = seq_len
-            self.lr = lr
-            self.weight_decay = weight_decay
-            self.batch_size_train = batch_size_train
-            self.batch_size_val = batch_size_val
-
-            self.train_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
-            self.val_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
-            self.train_perplexity = FastPerplexity()
-            self.val_perplexity = FastPerplexity()
-
-            self.save_hyperparameters(ignore=['mambaDNA'])
-
-
-        def forward(self, inpts):
-            return self.mambaDNA(inpts).logits
-
-        def train_dataloader(self):
-            seed = torch.distributed.get_rank()
-            train_iter = GenomeIterator(GenomeDataset.numpy_path, self.training_entries, seed)
-            train_ds = GenomeDataset(train_iter)
-
-            train_ds.config(self.tokenizer, self.seq_len)
-            return DataLoader(train_ds, batch_size=self.batch_size_train)
-
-        def training_step(self, batch, batch_idx):
-            inpts, trgts = batch
-            outpts = self(inpts)
-            # print("inpts: {}, trgts: {}, outpts: {}".format(inpts.size(), trgts.size(), outpts.size()))
-            loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-            self.log("train_loss", loss.item(), sync_dist=True)
-
-            if math.isnan(loss.double()):
-                raise ValueError("Loss NaN")
-
-            self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-            self.train_perplexity(loss)
-
-            return loss
-
-        def on_train_batch_end(self, outputs, batch, batch_idx):
-            # log and reset at end of step
-            self.log("train_accuracy", self.train_accuracy.compute()*100.0, prog_bar=True)
-            self.train_accuracy.reset()
-            self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
-            self.train_perplexity.reset()
-
-        def val_dataloader(self):
-            seed = torch.distributed.get_rank()
-            val_iter = GenomeIterator(GenomeDataset.numpy_path, self.validation_entries, seed)
-            val_ds = GenomeDataset(val_iter)
-
-            val_ds.config(self.tokenizer, self.seq_len)
-            return DataLoader(val_ds, batch_size=self.batch_size_val)
-
-        def validation_step(self, batch, batch_idx):
-            inpts, trgts = batch
-            outpts = self(inpts)
-            loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-            
-            self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-            self.val_perplexity(loss)
-
-        def on_validation_batch_end(self, outputs, batch, batch_idx):
-            # log and reset at end of step
-            self.log("val_accuracy", self.val_accuracy.compute()*100.0)
-            self.val_accuracy.reset()
-            self.log("val_perplexity", self.val_perplexity.compute())
-            self.val_perplexity.reset()
-
-        def configure_optimizers(self):
-            optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
-                                          weight_decay=self.weight_decay) #eps=epsilon,
-            return optimizer
-        
 
     torch.set_float32_matmul_precision('medium')
 
