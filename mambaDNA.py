@@ -623,26 +623,27 @@ def mamba_training(args):
 
 
 def main(args):
-    if args.get_dataset_T2T:
+    if args.subcommand=='initialize' and args.dataset=='T2T':
         GenomeDataset.get_t2t_data()
-    if args.get_dataset_yeast:
+    elif args.subcommand=='initialize' and args.dataset=='yeast':
         GenomeDataset.get_yeast_data()
-    if args.validate_dataset:
+    elif args.subcommand=='validate' and args.module=='dataset':
         GenomeIterator.validate_T2T_ds()
-    if args.validate_tokenizer:
+    elif args.subcommand=='validate' and args.module=='tokenizer':
         DNATokenizer.validate()
-    if args.subcommand=='train':
+    elif args.subcommand=='train':
         mamba_training(args)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog="MambaDNA")
-    subparsers = parser.add_subparsers(dest='subcommand')
+    subparsers = parser.add_subparsers(dest='subcommand', required=True)
 
-    parser.add_argument("--get_dataset_T2T", action="store_true", help="download and precompute T2T dataset")
-    parser.add_argument("--get_dataset_yeast", action="store_true", help="download and precompute yeast dataset")
-    parser.add_argument("--validate_dataset", action="store_true", help="validate training/validation entry sets and access of T2T dataset")
-    parser.add_argument("--validate_tokenizer", action="store_true", help="validate tokenizer")
+    initialize_sp = subparsers.add_parser("initialize", help="initialize datasets")
+    initialize_sp.add_argument("dataset", choices=['T2T', 'yeast'], help="dataset to initialize")
+
+    validate_sp = subparsers.add_parser("validate", help="validate submodules")
+    validate_sp.add_argument("module", choices=['dataset', 'tokenizer'], help="module to validate")
 
     train_sp = subparsers.add_parser("train", help="run training")
     train_sp.add_argument("--ckpt_path", default=None, metavar="path/to/checkpoint.chpt",
