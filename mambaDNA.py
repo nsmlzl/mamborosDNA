@@ -587,12 +587,12 @@ def mamba_training(args):
 
     # reproducing sec 4.3.2 with 1.3-1.4M parameters, 330B token pretraining
     # model parameters
-    n_layer = 12
-    d_model = 128
+    n_layer = 16
+    d_model = 256
 
     # training
-    gpu_cnt = 4
-    limit_train_batches = 1000
+    gpu_cnt = 6
+    limit_train_batches = 4000
 
     seq_len = 1024
     batch_size_train = 512
