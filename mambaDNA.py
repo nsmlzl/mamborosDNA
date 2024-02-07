@@ -592,7 +592,8 @@ def mamba_training(args):
 
     # training
     gpu_cnt = 6
-    limit_train_batches = 4000
+    max_epochs = 40
+    limit_train_batches = 100
 
     seq_len = 1024
     batch_size_train = 512
@@ -617,7 +618,7 @@ def mamba_training(args):
         mambaDNA = LitMambaDNA.load_from_checkpoint(ckpt_path, map_location="cpu")
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
-    trainer = L.Trainer(max_epochs=1, limit_train_batches=limit_train_batches, limit_val_batches=int(1),
+    trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches, limit_val_batches=int(1),
                         check_val_every_n_epoch=None, val_check_interval=5, gradient_clip_val=1.0,
                         gradient_clip_algorithm="value", devices=gpu_cnt, accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp",
