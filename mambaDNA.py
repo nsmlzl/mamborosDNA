@@ -487,7 +487,7 @@ class FastPerplexity(Metric):
 
 
 class LitMambaDNA(L.LightningModule):
-    def __init__(self, dataset, n_layer, d_model, seq_len, lr, weight_decay, batch_size_train,
+    def __init__(self, dataset, n_layer, d_model, seq_len, lr, lr_scheduler_factor, weight_decay, batch_size_train,
                  batch_size_val, gpu_cnt):
         super().__init__()
         self.dataset = dataset
@@ -509,6 +509,7 @@ class LitMambaDNA(L.LightningModule):
 
         self.seq_len = seq_len
         self.lr = lr
+        self.lr_scheduler_factor = lr_scheduler_factor
         self.weight_decay = weight_decay
         self.batch_size_train = batch_size_train
         self.batch_size_val = batch_size_val
@@ -578,7 +579,9 @@ class LitMambaDNA(L.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
                                       weight_decay=self.weight_decay) #eps=epsilon,
-        return optimizer
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3,
+                                                                  factor=self.lr_scheduler_factor, verbose=True)
+        return {'optimizer': optimizer, 'lr_scheduler': lr_scheduler, 'monitor': 'train_loss'}
 
 
 def mamba_training(args):
@@ -591,7 +594,7 @@ def mamba_training(args):
     d_model = 256
 
     # training
-    gpu_cnt = 6
+    gpu_cnt = 8
     max_epochs = 40
     limit_train_batches = 100
 
@@ -604,6 +607,7 @@ def mamba_training(args):
 
     # optimizer
     lr = 8e-3
+    lr_scheduler_factor = 0.1
     weight_decay = 0.1
     #epsilon = 0.2 # ???
 
@@ -611,18 +615,19 @@ def mamba_training(args):
     torch.set_float32_matmul_precision('medium')
 
     if ckpt_path == None:
-        mambaDNA = LitMambaDNA(dataset, n_layer, d_model, seq_len, lr, weight_decay,
+        mambaDNA = LitMambaDNA(dataset, n_layer, d_model, seq_len, lr, lr_scheduler_factor, weight_decay,
                                batch_size_train, batch_size_val, gpu_cnt)
     else:
         print("Loading mambaDNA from checkpoint {}".format(ckpt_path))
         mambaDNA = LitMambaDNA.load_from_checkpoint(ckpt_path, map_location="cpu")
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
+    lr_monitor = L.pytorch.callbacks.LearningRateMonitor(logging_interval='step')
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches, limit_val_batches=int(1),
                         check_val_every_n_epoch=None, val_check_interval=5, gradient_clip_val=1.0,
                         gradient_clip_algorithm="value", devices=gpu_cnt, accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp",
-                        use_distributed_sampler=False) #, profiler='simple')
+                        use_distributed_sampler=False, callbacks=[lr_monitor]) #, profiler='simple')
     trainer.fit(mambaDNA)
 
 
