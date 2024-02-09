@@ -607,7 +607,7 @@ def mamba_training(args):
 
     # optimizer
     lr = 8e-3
-    lr_scheduler_factor = 0.1
+    lr_scheduler_factor = 0.5
     weight_decay = 0.1
     #epsilon = 0.2 # ???
 
