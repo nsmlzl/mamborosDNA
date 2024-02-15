@@ -546,7 +546,7 @@ class LitMambaDNA(L.LightningModule):
         self.train_perplexity(loss)
         return loss
 
-    def on_train_batch_end(self, outputs, batch, batch_idx):
+    def on_train_epoch_end(self):
         # log and reset at end of step
         self.log("train_accuracy", self.train_accuracy.compute()*100.0, prog_bar=True)
         self.train_accuracy.reset()
@@ -569,7 +569,7 @@ class LitMambaDNA(L.LightningModule):
         self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
         self.val_perplexity(loss)
 
-    def on_validation_batch_end(self, outputs, batch, batch_idx):
+    def on_validation_epoch_end(self):
         # log and reset at end of step
         self.log("val_accuracy", self.val_accuracy.compute()*100.0)
         self.val_accuracy.reset()
@@ -579,7 +579,7 @@ class LitMambaDNA(L.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
                                       weight_decay=self.weight_decay) #eps=epsilon,
-        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3,
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=150,
                                                                   factor=self.lr_scheduler_factor, verbose=True)
         return {'optimizer': optimizer, 'lr_scheduler': lr_scheduler, 'monitor': 'train_loss'}
 
@@ -595,12 +595,13 @@ def mamba_training(args):
 
     # training
     gpu_cnt = 8
-    max_epochs = 40
-    limit_train_batches = 100
+    max_epochs = 40 * 50
+    limit_train_batches = 16
+    limit_val_batches = 32
 
     seq_len = 1024
-    batch_size_train = 512
-    batch_size_val = 2048
+    batch_size_train = 64
+    batch_size_val = 64
     #batches_per_step = 16
     #n_steps = 20000
     #dropout = 0             # original Mamba did not use dropout
@@ -623,8 +624,8 @@ def mamba_training(args):
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
     lr_monitor = L.pytorch.callbacks.LearningRateMonitor(logging_interval='step')
-    trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches, limit_val_batches=int(1),
-                        check_val_every_n_epoch=None, val_check_interval=5, gradient_clip_val=1.0,
+    trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
+                        limit_val_batches=limit_val_batches, check_val_every_n_epoch=5, gradient_clip_val=1.0,
                         gradient_clip_algorithm="value", devices=gpu_cnt, accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp",
                         use_distributed_sampler=False, callbacks=[lr_monitor]) #, profiler='simple')
