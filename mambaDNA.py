@@ -588,14 +588,24 @@ def mamba_training(args):
     ckpt_path = args.ckpt_path
     dataset = args.dataset
 
-    # reproducing sec 4.3.2 with 1.3-1.4M parameters, 330B token pretraining
     # model parameters
-    n_layer = 16
-    d_model = 256
+    # # 1.4M parameter model
+    # n_layer = 12
+    # d_model = 128
+    # # 3.5M parameter model
+    # n_layer = 14
+    # d_model = 192
+    # # 7M parameter model
+    # n_layer = 16
+    # d_model = 256
+
+    # 19.3M parameter model
+    n_layer = 20
+    d_model = 384
 
     # training
     gpu_cnt = 8
-    max_epochs = 40 * 50
+    max_epochs = 150 * 50
     limit_train_batches = 16
     limit_val_batches = 32
 
@@ -608,7 +618,7 @@ def mamba_training(args):
 
     # optimizer
     lr = 8e-3
-    lr_scheduler_factor = 0.5
+    lr_scheduler_factor = 0.85
     weight_decay = 0.1
     #epsilon = 0.2 # ???
 
