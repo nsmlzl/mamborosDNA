@@ -585,7 +585,6 @@ class LitMambaDNA(L.LightningModule):
             ubound = int(self.seq_len * ubound) + 1
             outpts_tmp = outpts_tmp[:, lbound:ubound, :].contiguous()
             trgts_tmp = trgts_tmp[:, lbound:ubound].contiguous()
-            print(lbound, ubound, outpts_tmp.size(), trgts_tmp.size())
             metric(outpts_tmp.view(-1, vocab_size), trgts_tmp.view(-1))
 
         comp_partial_accuracy(self.val_0_20_accuracy, outpts, trgts, 0.0, 0.2)
