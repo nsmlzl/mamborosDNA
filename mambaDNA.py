@@ -516,6 +516,13 @@ class LitMambaDNA(L.LightningModule):
 
         self.train_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
         self.val_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
+
+        self.val_0_20_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
+        self.val_20_40_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
+        self.val_40_60_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
+        self.val_60_80_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
+        self.val_80_100_accuracy = MulticlassAccuracy(num_classes=mamba_config.vocab_size, average='micro')
+
         self.train_perplexity = FastPerplexity()
         self.val_perplexity = FastPerplexity()
 
@@ -569,12 +576,41 @@ class LitMambaDNA(L.LightningModule):
         self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
         self.val_perplexity(loss)
 
+        def comp_partial_accuracy(metric, outpts_tmp, trgts_tmp, lbound, ubound):
+            assert 0.0 <= lbound <= 1.0, "expected lower bound (lbound) in range 0.0 to 1.0."
+            assert 0.0 <= ubound <= 1.0, "expected upper bound (ubound) in range 0.0 to 1.0."
+            assert lbound < ubound, "expected lower bound (lbound) smaller than upper bound (ubound)."
+            vocab_size = outpts_tmp.size(-1)
+            lbound = int(self.seq_len * lbound)
+            ubound = int(self.seq_len * ubound) + 1
+            outpts_tmp = outpts_tmp[:, lbound:ubound, :].contiguous()
+            trgts_tmp = trgts_tmp[:, lbound:ubound].contiguous()
+            print(lbound, ubound, outpts_tmp.size(), trgts_tmp.size())
+            metric(outpts_tmp.view(-1, vocab_size), trgts_tmp.view(-1))
+
+        comp_partial_accuracy(self.val_0_20_accuracy, outpts, trgts, 0.0, 0.2)
+        comp_partial_accuracy(self.val_20_40_accuracy, outpts, trgts, 0.2, 0.4)
+        comp_partial_accuracy(self.val_40_60_accuracy, outpts, trgts, 0.4, 0.6)
+        comp_partial_accuracy(self.val_60_80_accuracy, outpts, trgts, 0.6, 0.8)
+        comp_partial_accuracy(self.val_80_100_accuracy, outpts, trgts, 0.8, 1.0)
+
     def on_validation_epoch_end(self):
         # log and reset at end of step
         self.log("val_accuracy", self.val_accuracy.compute()*100.0)
         self.val_accuracy.reset()
         self.log("val_perplexity", self.val_perplexity.compute())
         self.val_perplexity.reset()
+
+        self.log("val_0_20_accuracy", self.val_0_20_accuracy.compute()*100.0)
+        self.val_0_20_accuracy.reset()
+        self.log("val_20_40_accuracy", self.val_20_40_accuracy.compute()*100.0)
+        self.val_20_40_accuracy.reset()
+        self.log("val_40_60_accuracy", self.val_40_60_accuracy.compute()*100.0)
+        self.val_40_60_accuracy.reset()
+        self.log("val_60_80_accuracy", self.val_60_80_accuracy.compute()*100.0)
+        self.val_60_80_accuracy.reset()
+        self.log("val_80_100_accuracy", self.val_80_100_accuracy.compute()*100.0)
+        self.val_80_100_accuracy.reset()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
@@ -592,9 +628,11 @@ def mamba_training(args):
     # # 1.4M parameter model
     # n_layer = 12
     # d_model = 128
+
     # # 3.5M parameter model
     # n_layer = 14
     # d_model = 192
+
     # # 7M parameter model
     # n_layer = 16
     # d_model = 256
@@ -602,6 +640,10 @@ def mamba_training(args):
     # 19.3M parameter model
     n_layer = 20
     d_model = 384
+
+    # # 40.7M parameter model
+    # n_layer = 24
+    # d_model = 512
 
     # training
     gpu_cnt = 8
