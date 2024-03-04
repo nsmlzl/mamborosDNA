@@ -142,7 +142,7 @@ class GenomeIterator:
         self.max_n_count = 0
 
         self.gdata = {}
-        dtype = np.dtype([('key', 'U25'), ('start', 'int_'), ('end', 'int_')])
+        dtype = np.dtype([('key', 'U45'), ('start', 'int_'), ('end', 'int_')])
         self.entry_ranges = np.empty(len(ds_entries), dtype=dtype)
 
         # only append entries of dataset
@@ -152,8 +152,8 @@ class GenomeIterator:
             assert os.path.exists(npath), \
                 "Numpy file of entry {} does not exist".format(k)
 
-            # dtype of key set to U25; expects string <=25 chars
-            assert len(k) <= 25, \
+            # dtype of key set to U45; expects string <=45 chars
+            assert len(k) <= 45, \
                    "Key string length of {} (len {}) exceeds entry_ranges limit; update dtype".format(k, len(k))
 
             tokens = np.load(npath)
@@ -284,8 +284,18 @@ class GenomeIterator:
                "Yeast training and validation dataset share common entries {}".format(common_yeast)
         yeast_entry_cnt = len(GenomeDataset.training_entries_yeast) + len(GenomeDataset.validation_entries_yeast)
         assert yeast_entry_cnt == 112, \
-               "Expected a total of 112 entries for T2T dataset; got {} entries".format(yeast_entry_cnt)
+               "Expected a total of 112 entries for yeast dataset; got {} entries".format(yeast_entry_cnt)
         print("Yeast training and validation sets valid.")
+        # check MHC dataset
+        s_train_mhc = set(GenomeDataset.training_entries_mhc)
+        s_valid_mhc = set(GenomeDataset.validation_entries_mhc)
+        common_mhc = s_train_mhc.intersection(s_valid_mhc)
+        assert not common_mhc, \
+               "MHC training and validation dataset share common entries {}".format(common_mhc)
+        mhc_entry_cnt = len(GenomeDataset.training_entries_mhc) + len(GenomeDataset.validation_entries_mhc)
+        assert mhc_entry_cnt == 126, \
+               "Expected a total of 126 entries for MHC dataset; got {} entries".format(mhc_entry_cnt)
+        print("MHC training and validation sets valid.")
 
 
         yeast_train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries_yeast, 42)
@@ -350,6 +360,7 @@ class GenomeDataset(torch.utils.data.IterableDataset):
 
     T2T_path = "dataset/ncbi_dataset/data/GCF_009914755.1/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna"
     yeast_path = "dataset/cerevisiae.pan.fa"
+    mhc_path = "dataset/mhc.fasta"
     numpy_path = "dataset/numpy/"
 
     training_entries_T2T = ['NC_060925.1', 'NC_060926.1', 'NC_060927.1', 'NC_060928.1', 'NC_060929.1',
@@ -394,6 +405,72 @@ class GenomeDataset(torch.utils.data.IterableDataset):
                                 'YPS128#1#chrV', 'SK1#1#chrVI', 'DBVPG6044#1#chrVII', 'S288C#1#chrVIII',
                                 'DBVPG6765#1#chrIX', 'UWOPS034614#1#chrX', 'Y12#1#chrXI', 'YPS128#1#chrXII',
                                 'SK1#1#chrXIII', 'DBVPG6044#1#chrXIV', 'S288C#1#chrXV', 'DBVPG6765#1#chrXVI']
+
+    # preliminary mhc training / validation split
+    training_entries_mhc = ['chm13#chr6:28385000-33300000', 'grch38#chr6:28510128-33480000',
+                            'HG00438#1#h1tg000040l:22870040-27725000', 'HG00438#2#h2tg000042l:22875152-27895000',
+                            'HG00621#1#h1tg000020l:22865680-27905000', 'HG00621#2#h2tg000005l:28460000-33394840',
+                            'HG00673#1#h1tg000030l:28480000-33309720', 'HG00673#2#h2tg000018l:0-2900000',
+                            'HG00673#2#h2tg000031l:10256-1959976', 'HG00733#1#h1tg000070l:28540000-33419448',
+                            'HG00733#2#h2tg000060l:26405000-27483925', 'HG00733#2#h2tg000166l:56-551833',
+                            'HG00735#1#h1tg000013l:28505000-33529960', 'HG00735#2#h2tg000038l:768-4899592',
+                            'HG00735#2#h2tg000088l:1770000-1971600', 'HG00741#1#h1tg000025l:22875800-27809488',
+                            'HG00741#2#h2tg000077l:25160112-30145000', 'HG01071#1#h1tg000017l:136-4190000',
+                            'HG01071#1#h1tg000093l:6465160-7272928', 'HG01071#2#h2tg000076l:6400680-11360000',
+                            'HG01106#1#h1tg000024l:6450944-11410000', 'HG01106#2#h2tg000019l:115520424-120479488',
+                            'HG01109#2#h2tg000001l:27065360-32000000', 'HG01123#1#h1tg000057l:25406272-30460000',
+                            'HG01123#2#h2tg000050l:28510000-33454752', 'HG01175#1#h1tg000069l:6460022-11224566',
+                            'HG01175#1#h1tg000188l:192-200000', 'HG01175#2#h2tg000032l:22865280-27834488',
+                            'HG01243#1#h1tg000074l:64-200000', 'HG01243#1#h1tg000117l:640-4729848',
+                            'HG01243#2#h2tg000097l:26140000-30954732', 'HG01243#2#h2tg000146l:1775000-1977373',
+                            'HG01258#1#h1tg000066l:26680048-31610000', 'HG01258#2#h2tg000011l:25745000-30694616',
+                            'HG01358#1#h1tg000008l:6451192-11445000', 'HG01358#2#h2tg000082l:6461192-11315000',
+                            'HG01361#2#h2tg000059l:28530000-33574864', 'HG01891#1#h1tg000024l:25471272-30494488',
+                            'HG01891#2#h2tg000027l:26625048-31625000', 'HG01928#1#h1tg000020l:26885896-31930000',
+                            'HG01928#2#h2tg000017l:28450768-33499832', 'HG01952#1#h1tg000044l:26960936-31975000',
+                            'HG01952#2#h2tg000016l:28530000-33559848', 'HG01978#1#h1tg000035l:28455000-33469848',
+                            'HG01978#2#h2tg000046l:965008-6035000', 'HG02055#1#h1tg000074l:0-4714592',
+                            'HG02055#1#h1tg000107l:208-210000', 'HG02055#2#h2tg000056l:1096-203976',
+                            'HG02080#1#h1tg000032l:28520000-33484896', 'HG02080#2#h2tg000002l:22875040-27915000',
+                            'HG02109#1#h1tg000124l:0-4694976', 'HG02109#1#h1tg000192l:1720000-1917499',
+                            'HG02109#2#h2tg000055l:951176-5910000', 'HG02145#1#h1tg000017l:6460752-11215000',
+                            'HG02145#1#h1tg000194l:3445256-3648582', 'HG02145#2#h2tg000005l:5000-4814248',
+                            'HG02145#2#h2tg000204l:3425000-3625704', 'HG02148#1#h1tg000076l:22645936-27570000',
+                            'HG02148#2#h2tg000021l:28525000-28725704', 'HG02148#2#h2tg000034l:896-4704704',
+                            'HG02257#2#h2tg000080l:1780000-6705000', 'HG02486#1#h1tg000005l:25915024-30869744',
+                            'HG02486#2#h2tg000026l:28405256-33400000', 'HG02559#1#h1tg000047l:28525000-33565000',
+                            'HG02559#2#h2tg000064l:28480000-33429848', 'HG02572#1#h1tg000052l:0-4685000',
+                            'HG02572#2#h2tg000201l:1725000-6619888', 'HG02622#1#h1tg000042l:27005496-32145000',
+                            'HG02622#2#h2tg000041l:28535000-33549320', 'HG02630#1#h1tg000088l:15385000-20218811',
+                            'HG02630#1#h1tg000147l:3440512-3643392', 'HG02630#2#h2tg000015l:26865000-29774952',
+                            'HG02630#2#h2tg000058l:22635880-24764972', 'HG02717#1#h1tg000073l:1775000-6724184',
+                            'HG02717#2#h2tg000061l:22650152-27715000', 'HG02723#1#h1tg000100l:1415000-6335000',
+                            'HG02723#2#h2tg000107l:22645040-27552632', 'HG02818#1#h1tg000026l:0-4814632',
+                            'HG02818#1#h1tg000296l:312-195000', 'HG02818#1#h1tg000358l:0-105984',
+                            'HG02818#2#h2tg000019l:16426328-18440000', 'HG02818#2#h2tg000045l:15000-2706770',
+                            'HG02818#2#h2tg000293l:192-200000', 'HG02886#1#h1tg000006l:22030032-26955000',
+                            'HG03098#1#h1tg000086l:22036272-26959022', 'HG03098#1#h1tg000186l:832-200000',
+                            'HG03098#2#h2tg000070l:22020000-27025000', 'HG03453#1#h1tg000094l:576-200000',
+                            'HG03453#1#h1tg000148l:865432-5669135', 'HG03453#2#h2tg000229l:5192-205000',
+                            'HG03453#2#h2tg000232l:0-4689240', 'HG03486#1#h1tg000034l:22865104-27583779',
+                            'HG03486#1#h1tg000131l:1730000-1930576', 'HG03486#2#h2tg000002l:0-4724120',
+                            'HG03492#1#h1tg000049l:15375152-20121680', 'HG03492#1#h1tg000215l:1736-204488',
+                            'HG03492#2#h2tg000060l:27700512-27903776', 'HG03492#2#h2tg000100l:0-4714952',
+                            'HG03516#1#h1tg000073l:22631064-27570000', 'HG03516#2#h2tg000003l:28570000-33584976',
+                            'HG03516#2#h2tg000202l:24-441470', 'HG03540#1#h1tg000082l:16455432-21490000',
+                            'HG03540#2#h2tg000013l:22880432-27770000', 'HG03579#1#h1tg000035l:16450000-21125662',
+                            'HG03579#1#h1tg000097l:1770000-1969808', 'HG03579#2#h2tg000002l:512-4779888',
+                            'HG03579#2#h2tg000220l:1096-204360', 'NA18906#1#h1tg000017l:27890048-32825000',
+                            'NA18906#2#h2tg000020l:22855296-27800000', 'NA20129#1#h1tg000077l:0-4714952',
+                            'NA20129#2#h2tg000038l:320-200000', 'NA20129#2#h2tg000054l:22640000-27332928',
+                            'NA21309#1#h1tg000026l:640-4749848', 'NA21309#1#h1tg000294l:3475000-3674040',
+                            'NA21309#2#h2tg000021l:0-4629880']
+    validation_entries_mhc = ['HG00733#2#h2tg000008l:0-3280000', 'HG01109#1#h1tg000084l:26565424-31500000',
+                              'HG01361#1#h1tg000109l:6455112-11370000', 'HG02055#2#h2tg000058l:22631008-27275355',
+                              'HG02257#1#h1tg000022l:27000136-31924872', 'HG02572#1#h1tg000139l:6455263-6744671',
+                              'HG02723#2#h2tg000038l:23475768-23678648', 'HG02886#2#h2tg000003l:25120800-30214744',
+                              'HG03486#2#h2tg000110l:1780000-1978654', 'NA20129#1#h1tg000243l:3460640-3664138',
+                              'NA21309#2#h2tg000288l:1725000-1926984']
 
 
     def __init__(self, genomeIterator):
@@ -461,6 +538,14 @@ class GenomeDataset(torch.utils.data.IterableDataset):
 
         GenomeDataset.create_np_data(GenomeDataset.yeast_path, GenomeDataset.numpy_path)
 
+    def get_mhc_data():
+        if not Path(GenomeDataset.mhc_path).exists():
+            # For now, print instructions for manually downloading the dataset
+            print("File not found: {}".format(GenomeDataset.mhc_path))
+            print("Please download MHC FASTA file and store as {}.".format(GenomeDataset.mhc_path))
+            return
+
+        GenomeDataset.create_np_data(GenomeDataset.mhc_path, GenomeDataset.numpy_path)
 
 # inspired by HyenaDNA and torchmetrics
 # https://github.com/HazyResearch/hyena-dna/blob/d553021b483b82980aa4b868b37ec2d4332e198a/src/tasks/torchmetrics.py#L24-L73
@@ -497,6 +582,9 @@ class LitMambaDNA(L.LightningModule):
         elif self.dataset == "yeast":
             self.training_entries = GenomeDataset.training_entries_yeast
             self.validation_entries = GenomeDataset.validation_entries_yeast
+        elif self.dataset == "MHC":
+            self.training_entries = GenomeDataset.training_entries_mhc
+            self.validation_entries = GenomeDataset.validation_entries_mhc
         else:
             raise ValueError("unknown dataset: {}".format(self.dataset))
 
@@ -688,6 +776,8 @@ def main(args):
         GenomeDataset.get_t2t_data()
     elif args.subcommand=='initialize' and args.dataset=='yeast':
         GenomeDataset.get_yeast_data()
+    elif args.subcommand=='initialize' and args.dataset=='MHC':
+        GenomeDataset.get_mhc_data()
     elif args.subcommand=='validate' and args.module=='dataset':
         GenomeIterator.validate_T2T_ds()
     elif args.subcommand=='validate' and args.module=='tokenizer':
@@ -701,7 +791,7 @@ if __name__ == '__main__':
     subparsers = parser.add_subparsers(dest='subcommand', required=True)
 
     initialize_sp = subparsers.add_parser("initialize", help="initialize datasets")
-    initialize_sp.add_argument("dataset", choices=['T2T', 'yeast'], help="dataset to initialize")
+    initialize_sp.add_argument("dataset", choices=['T2T', 'yeast', 'MHC'], help="dataset to initialize")
 
     validate_sp = subparsers.add_parser("validate", help="validate submodules")
     validate_sp.add_argument("module", choices=['dataset', 'tokenizer'], help="module to validate")
@@ -709,7 +799,7 @@ if __name__ == '__main__':
     train_sp = subparsers.add_parser("train", help="run training")
     train_sp.add_argument("--ckpt_path", default=None, metavar="path/to/checkpoint.chpt",
                           help="provide optional checkpoint file to load model from")
-    train_sp.add_argument("--dataset", choices=['T2T', 'yeast'], default='T2T',
+    train_sp.add_argument("--dataset", choices=['T2T', 'yeast', 'MHC'], default='T2T',
                           help="select training dataset")
     args = parser.parse_args()
 
