@@ -4,7 +4,7 @@ import torch
 
 
 def main():
-    tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-neox-20b')
+    tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
     #tokenizer = AutoTokenizer.from_pretrained("state-spaces/mamba-2.8b-hf")
     model = MambaForCausalLM.from_pretrained("state-spaces/mamba-2.8b-hf").to("cuda")
 
@@ -14,10 +14,11 @@ def main():
 
     #print(input_texts)
     #print(tokenizer.bos_token)
-    input_ids = tokenizer("Explain the difference between a FPGA and a CPU?", return_tensors="pt")["input_ids"].to("cuda")
 
-    out = model.generate(input_ids, max_new_tokens=500).to('cpu')
-    print(tokenizer.batch_decode(out))
+    input_ids = tokenizer("Explain the difference between a FPGA and a CPU?", return_tensors="pt")["input_ids"].to("cuda")
+    out = model.generate(input_ids, max_new_tokens=500).to("cpu")
+    for a in tokenizer.batch_decode(out):
+        print(a)
 
 
 if __name__ == '__main__':
