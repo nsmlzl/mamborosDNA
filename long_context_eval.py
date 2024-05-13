@@ -19,15 +19,6 @@ def compute(args):
     hf_state_dict = hf_model.state_dict()
     hf_state_dict['backbone.embedding.weight'] = hf_state_dict.pop('backbone.embeddings.weight')
 
-    mamba_config = MambaConfig(n_layer=64, d_model=2560, vocab_size=50280,
-                               ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
-                               pad_vocab_size_multiple=1)
-    model = MambaLMHeadModel(mamba_config)
-    model.load_state_dict(hf_state_dict)
-    model = model.to("cuda")
-    model.eval()
-    
-
     input_texts = datasets.load_dataset("PY007/tokenized_proof_pile_test_neox", split="test")
     input_texts = input_texts.filter(lambda x: x["tokenized_len"] >= 32768, num_proc=64)
     input_texts = input_texts[:50]
@@ -42,11 +33,33 @@ def compute(args):
         encoded_texts = [x[0:context_length] for x in encoded_texts]
 
         for idx in range(0, len(encoded_texts)):
+            ssm_cfg = {}
+            if args.context_length is not None:
+                hstate_trnsf_cnt = (context_length // args.context_length) - 1
+                ssm_cfg = {'max_hstate_trnsf_cnt': hstate_trnsf_cnt}
+
+            mamba_config = MambaConfig(n_layer=64, d_model=2560, vocab_size=50280,
+                                       ssm_cfg=ssm_cfg, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
+                                       pad_vocab_size_multiple=1)
+
+            model = MambaLMHeadModel(mamba_config)
+            model.load_state_dict(hf_state_dict)
+            model = model.to("cuda")
+            model.eval()
+
             input_ids = torch.tensor([encoded_texts[idx]]).to("cuda")
             target_ids = input_ids[:, 1:].clone().contiguous()
 
             with torch.no_grad():
-                logits = model(input_ids).logits[:, :-1, :].contiguous()
+                if args.context_length is None:
+                    logits = model(input_ids).logits[:, :-1, :].contiguous()
+                else:
+                    logits = torch.zeros(target_ids.size(0), target_ids.size(1), mamba_config.vocab_size).to("cuda")
+                    for i in range(0, context_length-args.context_length-1, args.context_length):
+                        logits[0, i:i+args.context_length, :] = \
+                               model(input_ids[:, i:i+args.context_length]).logits[:, :, :].contiguous()
+                    logits[0, -args.context_length+1:, :] = model(input_ids[:, -args.context_length:]).logits[:,:-1,:].contiguous()
+
                 cross_entropy = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), reduction='mean')
                 ppl = torch.exp(cross_entropy)
                 ppls.append(ppl.item())
@@ -87,6 +100,7 @@ if __name__ == '__main__':
 
     comp_sp = subparsers.add_parser("compute", help="compute perplexity for multiple context lengths")
     comp_sp.add_argument("--file", type=str, default="data.pkl", help="output file path", metavar="path/to/data.pkl")
+    comp_sp.add_argument("--context_length", type=int, default=None, help="native mamboros context length")
     comp_sp.set_defaults(func=compute)
 
     vis_sp = subparsers.add_parser("visualize", help="visualize perplexity")
