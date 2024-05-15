@@ -1,4 +1,6 @@
+<div align="center">
 <img src="mamboros.jpg" alt="Mamboros" width="60%"/>
+</div>
 
 # Mamboros
 
@@ -63,7 +65,9 @@ Perplexity on Next-Token-Prediction is computed over 50 predictions from
 pseude-context-length (x-axis) is set to the respective context length; the corresponding Mamba models use
 the pseudo-context-length as their operational-context-length.
 
+<div align="center">
 <img src="context_length_vs_perplexity.png" alt="context length vs perplexity plot" width="60%"/>
+</div>
 
 As long-mamba demonstrated, the perplexity and its standard deviation increases for longer context lengths.
 This is (probably) caused by the pre-training being performed on a context length of 2k tokens.
@@ -78,7 +82,15 @@ to vanilla-mamba 3.16, cross-entropy mamboros to target 7.25). The GPU memory us
 1k operational-context-length is 11.6GB (pseudo-context-length has no impact). Mamba requires for 15k
 context length 16.7GB GPU memory.
 
+Mamboros without hidden-state transfer performs best, since it is just performing 1k context length NTP
+(optimal for pre-trained model). Furthermore, this benchmark does actually not require any long-context
+memoryzation.
+
+*Summary:* Mamboros seems to perform comparable to Mamba. Current bottleneck is pre-trained model, which
+only works for context-lengths of less than 6k tokens.
+
 
 ### Future
 
-* Fine-tune model for longer (pseudo-)context-lengths
+* Fine-tune model for longer pseudo-context-lengths to enable actual utilization for long-context-lengths
+* Test with needle-in-haystack benchmark
