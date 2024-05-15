@@ -571,7 +571,7 @@ class FastPerplexity(Metric):
         return torch.exp(self.total_log_probs / self.count.double())
 
 
-class LitMambaDNA(L.LightningModule):
+class LitMamborosDNA(L.LightningModule):
     def __init__(self, dataset, n_layer, d_model, seq_len, lr, lr_scheduler_factor, weight_decay, batch_size_train,
                  batch_size_val, gpu_cnt):
         super().__init__()
@@ -592,7 +592,7 @@ class LitMambaDNA(L.LightningModule):
         mamba_config = MambaConfig(n_layer=n_layer, d_model=d_model, vocab_size=self.tokenizer.vocab_size,
                                    ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
                                    pad_vocab_size_multiple=1)
-        self.mambaDNA = MambaLMHeadModel(mamba_config)
+        self.mamborosDNA = MambaLMHeadModel(mamba_config)
         self.loss_fn = nn.CrossEntropyLoss()
 
         self.seq_len = seq_len
@@ -614,10 +614,10 @@ class LitMambaDNA(L.LightningModule):
         self.train_perplexity = FastPerplexity()
         self.val_perplexity = FastPerplexity()
 
-        self.save_hyperparameters(ignore=['mambaDNA'])
+        self.save_hyperparameters(ignore=['mamborosDNA'])
 
     def forward(self, inpts):
-        return self.mambaDNA(inpts).logits
+        return self.mamborosDNA(inpts).logits
 
     def train_dataloader(self):
         seed = torch.distributed.get_rank()
@@ -700,7 +700,7 @@ class LitMambaDNA(L.LightningModule):
         self.val_80_100_accuracy.reset()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.mambaDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
+        optimizer = torch.optim.AdamW(self.mamborosDNA.parameters(), lr=self.lr, betas=(0.9, 0.95),
                                       weight_decay=self.weight_decay) #eps=epsilon,
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=150,
                                                                   factor=self.lr_scheduler_factor, verbose=True)
@@ -755,11 +755,11 @@ def mamba_training(args):
     torch.set_float32_matmul_precision('medium')
 
     if ckpt_path == None:
-        mambaDNA = LitMambaDNA(dataset, n_layer, d_model, seq_len, lr, lr_scheduler_factor, weight_decay,
+        mamborosDNA = LitMamborosDNA(dataset, n_layer, d_model, seq_len, lr, lr_scheduler_factor, weight_decay,
                                batch_size_train, batch_size_val, gpu_cnt)
     else:
-        print("Loading mambaDNA from checkpoint {}".format(ckpt_path))
-        mambaDNA = LitMambaDNA.load_from_checkpoint(ckpt_path, map_location="cpu")
+        print("Loading mamborosDNA from checkpoint {}".format(ckpt_path))
+        mamborosDNA = LitMamborosDNA.load_from_checkpoint(ckpt_path, map_location="cpu")
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
     lr_monitor = L.pytorch.callbacks.LearningRateMonitor(logging_interval='step')
@@ -768,7 +768,7 @@ def mamba_training(args):
                         gradient_clip_algorithm="norm", devices=gpu_cnt, accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp",
                         use_distributed_sampler=False, callbacks=[lr_monitor]) #, profiler='simple')
-    trainer.fit(mambaDNA)
+    trainer.fit(mamborosDNA)
 
 
 def main(args):
@@ -787,7 +787,7 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog="MambaDNA")
+    parser = argparse.ArgumentParser(prog="MamborosDNA")
     subparsers = parser.add_subparsers(dest='subcommand', required=True)
 
     initialize_sp = subparsers.add_parser("initialize", help="initialize datasets")
