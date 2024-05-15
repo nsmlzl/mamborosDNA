@@ -1,4 +1,4 @@
-# mambaDNA
+# mamborosDNA
 
 WIP code to pre-train the Mamba model on the T2T
 ([paper](https://doi.org/10.1126/science.abj6987),
