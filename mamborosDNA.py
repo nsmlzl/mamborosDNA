@@ -534,6 +534,7 @@ class GenomeDataset(torch.utils.data.IterableDataset):
             print("$ mkdir dataset; cd dataset")
             print("$ curl -O {}".format(GenomeDataset.yeast_url))
             print("$ gzip -d cerevisiae.pan.fa.gz")
+            print("Afterwards rerun initialization subcommand.")
             return
 
         GenomeDataset.create_np_data(GenomeDataset.yeast_path, GenomeDataset.numpy_path)
@@ -543,6 +544,7 @@ class GenomeDataset(torch.utils.data.IterableDataset):
             # For now, print instructions for manually downloading the dataset
             print("File not found: {}".format(GenomeDataset.mhc_path))
             print("Please download MHC FASTA file and store as {}.".format(GenomeDataset.mhc_path))
+            print("Afterwards rerun initialization subcommand.")
             return
 
         GenomeDataset.create_np_data(GenomeDataset.mhc_path, GenomeDataset.numpy_path)
