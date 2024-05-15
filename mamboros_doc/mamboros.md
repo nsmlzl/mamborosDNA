@@ -30,7 +30,9 @@ Inspired by [long-mamba repo](https://github.com/jzhang38/LongMamba).
 
 * Mamboros implementation in [branch mamboros of nsmlzl/mamba repo](https://github.com/nsmlzl/mamba/tree/mamboros).
 * Necessary changes are in causal-conv1d and selective-scan kernel. As well as in Mamba pytorch module.
-* Pytests for [causal-conv1d]() and [selective-scan]() demonstrate the same output for forward path.
+* Pytests for [causal-conv1d](https://github.com/nsmlzl/mamba/blob/mamboros/tests/test_causal_conv1d.py)
+  and [selective-scan](https://github.com/nsmlzl/mamba/blob/8032c14ca1a9b139ba5471a0f18a80072d0437ee/tests/ops/test_selective_scan.py#L149-L252)
+  demonstrate the same output for forward path.
   The pytests for causal-conv1d also generate the same output for the backward path. The selective-scan pytests
   requires an additional hidden state gradient to be passed backward as well to generate the same results.
 * **Important:** Changes are only implemented in the slow path of Mamba block.
@@ -56,7 +58,7 @@ During context processing, ensure that hidden state transfers occur at the corre
 
 ## Analysis
 
-### Context Length vs Perplexity
+### Context Length vs Perplexity (`mamboros_eval.py`)
 
 First, we analyse context length vs perplexity (similar to [long-mamba](https://github.com/jzhang38/LongMamba))
 For this we use the pre-trained 2.8B and 370M mamba models from huggingface ([link](https://huggingface.co/state-spaces)).
