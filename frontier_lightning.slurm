@@ -1,10 +1,11 @@
 #!/bin/bash
-#SBATCH -A PROJECT_ID
-#SBATCH -J ddp_test
+#SBATCH -A bif148
+#SBATCH -J frontier_lightning_test
 #SBATCH -o logs/ddp_test-%j.o
 #SBATCH -e logs/ddp_test-%j.e
 #SBATCH -t 00:05:00
 #SBATCH -p batch
+#SBATCH -q debug
 #SBATCH -N 2
 
 # Only necessary if submitting like: sbatch --export=NONE ... (recommended)
@@ -13,12 +14,12 @@ unset SLURM_EXPORT_ENV
 
 # Load modules
 module load PrgEnv-gnu/8.3.3
-module load amd-mixed/5.7.1
+module load amd-mixed/6.0.0
 module load craype-accel-amd-gfx90a
 module load miniforge3/23.11.0
 
 # Activate your environment
-source activate /path/to/my_env
+source activate /ccs/proj/bif148/mamboros/mamboros_env
 
 # Get address of head node
 export MASTER_ADDR=$(hostname -i)
