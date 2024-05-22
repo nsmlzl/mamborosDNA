@@ -1,3 +1,7 @@
+import argparse
+import os
+from mpi4py import MPI
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
@@ -7,8 +11,6 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import torch.distributed as dist
-
-import os
 
 
 class MyTrainDataset(Dataset):
@@ -117,7 +119,6 @@ def main(save_every: int, total_epochs: int, batch_size: int, local_rank: int, w
 
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser(description='simple distributed training job')
     parser.add_argument('total_epochs', type=int, help='Total epochs to train the model')
     parser.add_argument('save_every', type=int, help='How often to save a snapshot')
@@ -128,13 +129,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     num_gpus_per_node = torch.cuda.device_count()
-    print ("num_gpus_per_node = " + str(num_gpus_per_node), flush=True)
+    print("num_gpus_per_node = " + str(num_gpus_per_node), flush=True)
 
-    from mpi4py import MPI
-    import os
     comm = MPI.COMM_WORLD
     world_size = comm.Get_size()
     global_rank = rank = comm.Get_rank()
+    print(f"world_size {world_size} rank {rank}")
     local_rank = int(rank) % int(num_gpus_per_node) # local_rank and device are 0 when using 1 GPU per task
     backend = None
     os.environ['WORLD_SIZE'] = str(world_size)
