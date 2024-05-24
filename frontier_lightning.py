@@ -1,6 +1,7 @@
 import argparse
 import os
 
+import torch
 from torch import optim, nn, utils, Tensor
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
