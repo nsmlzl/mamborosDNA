@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH -A bif148
 #SBATCH -J frontier_lightning_test
-#SBATCH -o logs/ddp_test-%j.o
-#SBATCH -e logs/ddp_test-%j.e
-#SBATCH -t 00:05:00
+#SBATCH -o logs/frontier_lightning_test-%j.o
+#SBATCH -e logs/frontier_lightning_test-%j.e
+#SBATCH -t 00:03:00
 #SBATCH -p batch
 #SBATCH -q debug
 #SBATCH -N 2
@@ -31,4 +31,4 @@ rm -rf ${MIOPEN_USER_DB_PATH}
 mkdir -p ${MIOPEN_USER_DB_PATH}
 
 # Run script
-srun -N2 -n16 -c7 --gpus-per-task=1 --gpu-bind=closest python3 -W ignore -u ./frontier_lightning.py 2000 10 --master_addr=$MASTER_ADDR --master_port=3442
+srun -N2 --ntasks-per-node=8 -c7 --gpus-per-task=1 --gpu-bind=closest python3 -W ignore -u ./frontier_lightning.py 2000 10 --master_addr=$MASTER_ADDR --master_port=3442
