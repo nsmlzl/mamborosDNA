@@ -7,7 +7,7 @@ from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 import lightning as L
 
-#from mpi4py import MPI
+from mpi4py import MPI
 
 
 # import torch
@@ -173,17 +173,17 @@ if __name__ == "__main__":
     num_gpus_per_node = torch.cuda.device_count()
     print("num_gpus_per_node = " + str(num_gpus_per_node), flush=True)
 
-    # comm = MPI.COMM_WORLD
-    # world_size = comm.Get_size()
-    # global_rank = rank = comm.Get_rank()
-    # print(f"world_size {world_size} rank {rank}")
-    # local_rank = int(rank) % int(num_gpus_per_node) # local_rank and device are 0 when using 1 GPU per task
+    comm = MPI.COMM_WORLD
+    world_size = comm.Get_size()
+    global_rank = rank = comm.Get_rank()
+    print(f"world_size {world_size} rank {rank}")
+    local_rank = int(rank) % int(num_gpus_per_node) # local_rank and device are 0 when using 1 GPU per task
     # backend = None
-    # os.environ['WORLD_SIZE'] = str(world_size)
-    # os.environ['RANK'] = str(global_rank)
-    # os.environ['LOCAL_RANK'] = str(local_rank)
-    # os.environ['MASTER_ADDR'] = str(args.master_addr)
-    # os.environ['MASTER_PORT'] = str(args.master_port)
+    os.environ['WORLD_SIZE'] = str(world_size)
+    os.environ['RANK'] = str(global_rank)
+    os.environ['LOCAL_RANK'] = str(local_rank)
+    os.environ['MASTER_ADDR'] = str(args.master_addr)
+    os.environ['MASTER_PORT'] = str(args.master_port)
     # os.environ['NCCL_SOCKET_IFNAME'] = 'hsn0'
 
     #dist.init_process_group(
