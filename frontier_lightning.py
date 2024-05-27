@@ -7,7 +7,7 @@ from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 import lightning as L
 
-from mpi4py import MPI
+#from mpi4py import MPI
 
 
 # import torch
@@ -141,11 +141,10 @@ class LitAutoEncoder(L.LightningModule):
 
 
 
-def main(save_every: int, total_epochs: int, batch_size: int, local_rank: int = 0, world_rank: int = 0, snapshot_path: str = "snapshot.pt"):
+def main():
     # define any number of nn.Modules (or use your current ones)
     encoder = nn.Sequential(nn.Linear(28 * 28, 64), nn.ReLU(), nn.Linear(64, 3))
     decoder = nn.Sequential(nn.Linear(3, 64), nn.ReLU(), nn.Linear(64, 28 * 28))
-
 
     # init the autoencoder
     autoencoder = LitAutoEncoder(encoder, decoder)
@@ -154,36 +153,36 @@ def main(save_every: int, total_epochs: int, batch_size: int, local_rank: int = 
     dataset = MNIST(os.getcwd(), download=True, transform=ToTensor())
     train_loader = utils.data.DataLoader(dataset)
 
-    # train the model (hint: here are some helpful Trainer arguments for rapid idea iteration)
+    # train the model
     trainer = L.Trainer(limit_train_batches=3, max_epochs=1,
                         accelerator="gpu", num_nodes=2, devices=8, strategy="ddp")
     trainer.fit(model=autoencoder, train_dataloaders=train_loader)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='simple distributed training job')
-    parser.add_argument('total_epochs', type=int, help='Total epochs to train the model')
-    parser.add_argument('save_every', type=int, help='How often to save a snapshot')
-    parser.add_argument('--batch_size', default=32, type=int, help='Input batch size on each device (default: 32)')
-    parser.add_argument("--master_addr", type=str, required=True)
-    parser.add_argument("--master_port", type=str, required=True)
+    #parser = argparse.ArgumentParser(description='simple distributed training job')
+    #parser.add_argument('total_epochs', type=int, help='Total epochs to train the model')
+    #parser.add_argument('save_every', type=int, help='How often to save a snapshot')
+    #parser.add_argument('--batch_size', default=32, type=int, help='Input batch size on each device (default: 32)')
+    #parser.add_argument("--master_addr", type=str, required=True)
+    #parser.add_argument("--master_port", type=str, required=True)
 
-    args = parser.parse_args()
+    #args = parser.parse_args()
 
     num_gpus_per_node = torch.cuda.device_count()
     print("num_gpus_per_node = " + str(num_gpus_per_node), flush=True)
 
-    comm = MPI.COMM_WORLD
-    world_size = comm.Get_size()
-    global_rank = rank = comm.Get_rank()
-    print(f"world_size {world_size} rank {rank}")
-    local_rank = int(rank) % int(num_gpus_per_node) # local_rank and device are 0 when using 1 GPU per task
+    #comm = MPI.COMM_WORLD
+    #world_size = comm.Get_size()
+    #global_rank = rank = comm.Get_rank()
+    #print(f"world_size {world_size} rank {rank}")
+    #local_rank = int(rank) % int(num_gpus_per_node) # local_rank and device are 0 when using 1 GPU per task
     # backend = None
-    os.environ['WORLD_SIZE'] = str(world_size)
-    os.environ['RANK'] = str(global_rank)
-    os.environ['LOCAL_RANK'] = str(local_rank)
-    os.environ['MASTER_ADDR'] = str(args.master_addr)
-    os.environ['MASTER_PORT'] = str(args.master_port)
+    #os.environ['WORLD_SIZE'] = str(world_size)
+    #os.environ['RANK'] = str(global_rank)
+    #os.environ['LOCAL_RANK'] = str(local_rank)
+    #os.environ['MASTER_ADDR'] = str(args.master_addr)
+    #os.environ['MASTER_PORT'] = str(args.master_port)
     # os.environ['NCCL_SOCKET_IFNAME'] = 'hsn0'
 
     #dist.init_process_group(
@@ -196,4 +195,4 @@ if __name__ == "__main__":
 
     #torch.cuda.set_device(local_rank)
 
-    main(args.save_every, args.total_epochs, args.batch_size) #, local_rank, global_rank)
+    main()
