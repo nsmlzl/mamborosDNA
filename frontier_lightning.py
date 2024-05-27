@@ -131,7 +131,7 @@ class LitAutoEncoder(L.LightningModule):
         loss = nn.functional.mse_loss(x_hat, x)
         # Logging to TensorBoard (if installed) by default
         #self.log("train_loss", loss)
-        print(f"device {self.device} global_rank {self.global_rank}: loss {loss.item()}")
+        print(f"device {self.device} global_rank {self.global_rank} {torch.cuda.get_device_name()}: loss {loss.item()}")
         return loss
 
     def configure_optimizers(self):
@@ -155,7 +155,7 @@ def main(save_every: int, total_epochs: int, batch_size: int, local_rank: int = 
     train_loader = utils.data.DataLoader(dataset)
 
     # train the model (hint: here are some helpful Trainer arguments for rapid idea iteration)
-    trainer = L.Trainer(limit_train_batches=2, max_epochs=1,
+    trainer = L.Trainer(limit_train_batches=3, max_epochs=1,
                         accelerator="gpu", num_nodes=2, devices=8, strategy="ddp")
     trainer.fit(model=autoencoder, train_dataloaders=train_loader)
 
