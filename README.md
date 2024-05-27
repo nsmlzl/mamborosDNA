@@ -23,7 +23,7 @@ Queue the slurm job *<job.slurm>* with `sbatch --export=NONE <job.slurm>`.
 ### Python
 
 * PyTorch with ROCm support
-* mpi4py
+* PyTorch Lightning
 
 ### Modules
 
