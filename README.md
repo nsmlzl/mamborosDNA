@@ -26,7 +26,7 @@ Queue the slurm job *<job.slurm>* with `sbatch --export=NONE <job.slurm>`.
 * PyTorch Lightning
 * Pyfaidx
 * Tensorboard
-* Mamba: Build locally and remove `torch_triton_rocm` module
+* Mamba: Build locally and remove `torch_triton_rocm` module; [changes to ROCm 6.0.0 are required](https://github.com/nsmlzl/mamba/blob/cdc6ed054f93c362079aa0b503e7d7bf4ce8f791/README.md?plain=1#L36).
 * Triton: Build locally from [official triton repo](https://github.com/triton-lang/triton)
 
 ### Modules
