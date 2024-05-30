@@ -30,7 +30,7 @@ from torchmetrics.classification import MulticlassAccuracy
 from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
 
 from pyfaidx import Fasta
-import pynvml
+#import pynvml
 
 
 # Tokenizer based on HyenaDNA's tokenizer, which is based on
@@ -575,7 +575,7 @@ class FastPerplexity(Metric):
 
 class LitMamborosDNA(L.LightningModule):
     def __init__(self, dataset, n_layer, d_model, seq_len, lr, lr_scheduler_factor, weight_decay, batch_size_train,
-                 batch_size_val, gpu_cnt):
+                 batch_size_val):
         super().__init__()
         self.dataset = dataset
         if self.dataset == "T2T":
@@ -735,8 +735,8 @@ def mamba_training(args):
     # d_model = 512
 
     # training
-    gpu_cnt = 8
-    max_epochs = 150 * 50
+    #gpu_cnt = 8
+    max_epochs = 5 #150 * 50
     limit_train_batches = 16
     limit_val_batches = 32
 
@@ -758,7 +758,7 @@ def mamba_training(args):
 
     if ckpt_path == None:
         mamborosDNA = LitMamborosDNA(dataset, n_layer, d_model, seq_len, lr, lr_scheduler_factor, weight_decay,
-                               batch_size_train, batch_size_val, gpu_cnt)
+                               batch_size_train, batch_size_val)
     else:
         print("Loading mamborosDNA from checkpoint {}".format(ckpt_path))
         mamborosDNA = LitMamborosDNA.load_from_checkpoint(ckpt_path, map_location="cpu")
@@ -767,7 +767,7 @@ def mamba_training(args):
     lr_monitor = L.pytorch.callbacks.LearningRateMonitor(logging_interval='step')
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5, gradient_clip_val=0.5,
-                        gradient_clip_algorithm="norm", devices=gpu_cnt, accelerator="gpu",
+                        gradient_clip_algorithm="norm", num_nodes=4, devices=8, accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp",
                         use_distributed_sampler=False, callbacks=[lr_monitor]) #, profiler='simple')
     trainer.fit(mamborosDNA)

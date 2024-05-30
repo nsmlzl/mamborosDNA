@@ -24,6 +24,10 @@ Queue the slurm job *<job.slurm>* with `sbatch --export=NONE <job.slurm>`.
 
 * PyTorch with ROCm support
 * PyTorch Lightning
+* Pyfaidx
+* Tensorboard
+* Mamba: Build locally and remove `torch_triton_rocm` module
+* Triton: Build locally from [official triton repo](https://github.com/triton-lang/triton)
 
 ### Modules
 
@@ -33,3 +37,8 @@ module load miniforge3/23.11.0
 module load amd-mixed/6.0.0
 module load craype-accel-amd-gfx90a
 ```
+
+### Notes
+
+* Removing the Triton cache directory `~/.triton` might resolve some errors.
+* Set the environment variable `TRITON_HIP_LLD_PATH` to the path of `ld.lld` (for instance `/opt/rocm/llvm/bin/ld.lld`).
