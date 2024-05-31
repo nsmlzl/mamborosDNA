@@ -766,7 +766,8 @@ def mamba_training(args):
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
     lr_monitor = L.pytorch.callbacks.LearningRateMonitor(logging_interval='step')
-    ckpt = L.pytorch.callbacks.ModelCheckpoint(verbose=True, every_n_epochs=10)
+    ckpt = L.pytorch.callbacks.ModelCheckpoint(save_top_k=10, monitor="train_loss", save_on_train_epoch_end=True,
+                                               verbose=True, every_n_epochs=10)
 
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5, gradient_clip_val=0.5,
