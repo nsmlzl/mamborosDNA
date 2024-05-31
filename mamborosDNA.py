@@ -765,11 +765,13 @@ def mamba_training(args):
 
     logger = TensorBoardLogger("tb_logs", name="mamba_model")
     lr_monitor = L.pytorch.callbacks.LearningRateMonitor(logging_interval='step')
+    ckpt = L.pytorch.callbacks.ModelCheckpoint(verbose=True, every_n_epochs=10)
+
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5, gradient_clip_val=0.5,
                         gradient_clip_algorithm="norm", num_nodes=4, devices=8, accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp",
-                        use_distributed_sampler=False, callbacks=[lr_monitor]) #, profiler='simple')
+                        use_distributed_sampler=False, callbacks=[lr_monitor, ckpt]) #, profiler='simple')
     trainer.fit(mamborosDNA)
 
 
