@@ -3,11 +3,10 @@
 #SBATCH -J frontier_lightning_test
 #SBATCH -o logs/frontier_lightning_test-%j.o
 #SBATCH -e logs/frontier_lightning_test-%j.e
-#SBATCH -t 00:10:00
+#SBATCH -t 02:00:00
 #SBATCH --signal=USR1@90
 #SBATCH -p batch
-#SBATCH -q debug
-#SBATCH -N 4
+#SBATCH -N 10
 
 # Only necessary if submitting like: sbatch --export=NONE ... (recommended)
 # Do NOT include this line when submitting without --export=NONE
@@ -37,4 +36,4 @@ rm -rf ${TRITON_CACHE_DIR}
 mkdir -p ${TRITON_CACHE_DIR}
 
 # Run script
-srun -N4 --ntasks-per-node=8 -c7 --gres=gpu:8 python3 -W ignore -u ./mamborosDNA.py train --dataset yeast
+srun -N10 --ntasks-per-node=8 -c7 --gres=gpu:8 python3 -W ignore -u ./mamborosDNA.py train --dataset yeast

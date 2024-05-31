@@ -737,7 +737,7 @@ def mamba_training(args):
 
     # training
     #gpu_cnt = 8
-    max_epochs = 5 #150 * 50
+    max_epochs = 150 * 5 #0
     limit_train_batches = 16
     limit_val_batches = 32
 
@@ -770,7 +770,7 @@ def mamba_training(args):
 
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5, gradient_clip_val=0.5,
-                        gradient_clip_algorithm="norm", num_nodes=4, devices=8, accelerator="gpu",
+                        gradient_clip_algorithm="norm", num_nodes=10, devices=8, accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp",
                         use_distributed_sampler=False, callbacks=[lr_monitor, ckpt],
                         plugins=[SLURMEnvironment(auto_requeue=False)]) #, profiler='simple')
