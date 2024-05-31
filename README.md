@@ -40,5 +40,5 @@ module load craype-accel-amd-gfx90a
 
 ### Notes
 
-* Removing the Triton cache directory `~/.triton` might resolve some errors.
+* Removing the Triton cache directory `~/.triton` might resolve some errors (different cache directory can be set with `TRITON_CACHE_DIR`).
 * Set the environment variable `TRITON_HIP_LLD_PATH` to the path of `ld.lld` (for instance `/opt/rocm/llvm/bin/ld.lld`).
