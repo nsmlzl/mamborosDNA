@@ -24,6 +24,7 @@ from mamba_ssm.models.config_mamba import MambaConfig
 
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.plugins.environments import SLURMEnvironment
 from torchmetrics import Metric
 from torchmetrics.classification import MulticlassAccuracy
 
@@ -771,7 +772,8 @@ def mamba_training(args):
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5, gradient_clip_val=0.5,
                         gradient_clip_algorithm="norm", num_nodes=4, devices=8, accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="ddp",
-                        use_distributed_sampler=False, callbacks=[lr_monitor, ckpt]) #, profiler='simple')
+                        use_distributed_sampler=False, callbacks=[lr_monitor, ckpt],
+                        plugins=[SLURMEnvironment(auto_requeue=False)]) #, profiler='simple')
     trainer.fit(mamborosDNA)
 
 

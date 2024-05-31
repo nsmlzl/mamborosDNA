@@ -4,6 +4,7 @@
 #SBATCH -o logs/frontier_lightning_test-%j.o
 #SBATCH -e logs/frontier_lightning_test-%j.e
 #SBATCH -t 00:10:00
+#SBATCH --signal=USR1@90
 #SBATCH -p batch
 #SBATCH -q debug
 #SBATCH -N 4
