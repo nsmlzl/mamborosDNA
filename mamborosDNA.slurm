@@ -18,11 +18,11 @@ module --ignore_cache load amd-mixed/6.0.0
 module --ignore_cache load craype-accel-amd-gfx90a
 module --ignore_cache load miniforge3/23.11.0
 
-export ROCM_PATH="/ccs/proj/bif148/mamboros/rocm-6.0.0"
-export TRITON_HIP_LLD_PATH="/ccs/proj/bif148/mamboros/rocm-6.0.0/llvm/bin/ld.lld"
+export ROCM_PATH="/lustre/orion/bif148/proj-shared/mamboros/rocm-6.0.0"
+export TRITON_HIP_LLD_PATH="/lustre/orion/bif148/proj-shared/mamboros/rocm-6.0.0/llvm/bin/ld.lld"
 
 # Activate your environment
-source activate /ccs/proj/bif148/mamboros/mamboros_env
+source activate /lustre/orion/bif148/proj-shared/mamboros/mamboros_env
 
 # Needed to bypass MIOpen, Disk I/O Errors
 export MIOPEN_USER_DB_PATH="/tmp/my-miopen-cache"
