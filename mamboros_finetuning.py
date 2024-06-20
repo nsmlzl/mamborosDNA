@@ -18,7 +18,7 @@ from mamba_ssm.models.config_mamba import MambaConfig
 
 def get(args):
     hf_model = AutoModelForCausalLM.from_pretrained(args.hf_identifier)
-    hf_state_dict = hf_model.state_dict()
+    hf_state_dict = hf_model.to("cpu").state_dict()
     hf_state_dict['backbone.embedding.weight'] = hf_state_dict.pop('backbone.embeddings.weight')
     hf_config = AutoConfig.from_pretrained(args.hf_identifier)
 
@@ -96,7 +96,7 @@ class SlimPajamaDataModule(L.LightningDataModule):
 
 
 class LitMamboros(L.LightningModule):
-    def __init__(self, pretrained_mamboros, tokenizer, seq_len, lr, lr_scheduler_factor, weight_decay,
+    def __init__(self, pretrained_mamboros, tokenizer, lr, lr_scheduler_factor, weight_decay,
                  batch_size_train, batch_size_val):
         super().__init__()
         self.mamboros = pretrained_mamboros
@@ -104,7 +104,6 @@ class LitMamboros(L.LightningModule):
         self.tokenizer = tokenizer
         self.loss_fn = nn.CrossEntropyLoss()
 
-        self.seq_len = seq_len
         self.lr = lr
         self.lr_scheduler_factor = lr_scheduler_factor
         self.weight_decay = weight_decay
@@ -163,12 +162,17 @@ def ftune(args):
                                pad_vocab_size_multiple=1)
 
     pretrained_state_dict = torch.load(args.model_path + args.state_dict_in)['mamba_state_dict']
+    # check state_dict is on CPU
+    for (ident, ten) in pretrained_state_dict.items():
+        assert type(ident) is not torch.Tensor
+        assert type(ten) is torch.Tensor
+        assert ten.device == torch.device("cpu"), f"expected state_dict of pretrained model to be on cpu; instead is {ten.device}"
+
     pretrained_mamboros = MambaLMHeadModel(mamba_config)
     pretrained_mamboros.load_state_dict(pretrained_state_dict)
     pretrained_mamboros = pretrained_mamboros.to("cuda")
 
-    seq_len = 5120
-    l_mamboros = LitMamboros(pretrained_mamboros, tokenizer, seq_len, lr, lr_scheduler_factor,
+    l_mamboros = LitMamboros(pretrained_mamboros, tokenizer, lr, lr_scheduler_factor,
                              weight_decay, batch_size_train, batch_size_val)
 
 
@@ -183,7 +187,7 @@ def ftune(args):
                         use_distributed_sampler=False, callbacks=[ckpt_cb])
     trainer.fit(l_mamboros, datamodule=sp_datamodule)
 
-    torch.save({'mamba_state_dict': l_mamboros.mamboros.state_dict()}, args.model_path + args.state_dict_out)
+    torch.save({'mamba_state_dict': l_mamboros.mamboros.to("cpu").state_dict()}, args.model_path + args.state_dict_out)
 
 
 if __name__ == '__main__':
