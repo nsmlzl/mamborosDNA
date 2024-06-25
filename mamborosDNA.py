@@ -593,7 +593,7 @@ class LitMamborosDNA(L.LightningModule):
 
         self.tokenizer = DNATokenizer()
         mamba_config = MambaConfig(n_layer=n_layer, d_model=d_model, vocab_size=self.tokenizer.vocab_size,
-                                   ssm_cfg={}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
+                                   ssm_cfg={'layer': 'Mamba2'}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
                                    pad_vocab_size_multiple=1)
         self.mamborosDNA = MambaLMHeadModel(mamba_config)
         self.loss_fn = nn.CrossEntropyLoss()
@@ -727,9 +727,13 @@ def mamba_training(args):
     # n_layer = 16
     # d_model = 256
 
-    # 19.3M parameter model
+    # # 19.3M parameter model
+    # n_layer = 20
+    # d_model = 384
+
+    # Mamba2 compatible
     n_layer = 20
-    d_model = 384
+    d_model = 512
 
     # # 40.7M parameter model
     # n_layer = 24
