@@ -5,6 +5,7 @@ import re
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from torch.utils.data import DataLoader, IterableDataset
 
 import lightning as L
@@ -86,6 +87,8 @@ class SlimPajamaDataModule(L.LightningDataModule):
         self.seed = seed
 
     def setup(self, stage=None):
+        if dist.is_initialized():
+            self.seed = self.seed + dist.get_rank()
         self.ds_train = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.length, seed=self.seed, split='train')
         # self.ds_train = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.length, seed=self.seed, split='test')
         # self.ds_test = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.length, seed=self.seed, split='test')
@@ -138,6 +141,9 @@ class LitMamboros(L.LightningModule):
     # def on_train_batch_end(self, outputs, batch, batch_idx):
     #     raise NotImplementedError()
 
+    # def on_fit_start(self):
+
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.mamboros.parameters(), lr=self.lr, betas=(0.9, 0.95),
                                       weight_decay=self.weight_decay) #eps=epsilon,
@@ -147,11 +153,13 @@ class LitMamboros(L.LightningModule):
 
 
 def ftune(args):
+    torch.cuda.memory._record_memory_history(max_entries=500000)
+
     # training
     gpu_cnt = 3
-    max_epochs = 10
-    limit_train_batches = 16
-    limit_val_batches = 32
+    max_epochs = 2
+    limit_train_batches = 4
+    limit_val_batches = 1
 
     batch_size_train = 1
     batch_size_val = 1
@@ -168,8 +176,8 @@ def ftune(args):
 
     assert os.environ.get("HF_HOME") is not None, \
              "HF_CACHE env variable not set; set to huggingface cache path"
-    length = 2
-    sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, length, batch_size_train, batch_size_val, 0)
+    length = 4096
+    sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, length, batch_size_train, batch_size_val, 42)
 
     ssm_cfg = {'layer': 'Mamba1'}
     hf_config = torch.load(args.model_path + "/mamba_config.pth")
@@ -206,20 +214,26 @@ def ftune(args):
                         use_distributed_sampler=False, callbacks=[ckpt_cb])
     trainer.fit(l_mamboros, datamodule=sp_datamodule)
 
+    torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+    torch.cuda.memory._record_memory_history(enabled=None)
+
     # store model parameters
-    tmp_ckpt_file = 'tmp_ckpt'
-    trainer.save_checkpoint(tmp_ckpt_file)
-    if trainer.is_global_zero:
-        tmp_ckpt = torch.load(tmp_ckpt_file)
-        state_dict = tmp_ckpt['state_dict']
-        state_dict = {re.search(r'^[^.]*\.(.*)', key).group(1): value for key, value in state_dict.items()}
-        for (key, value) in state_dict.items():
-            assert type(key) is not torch.Tensor
-            assert type(value) is torch.Tensor
-            assert value.device == torch.device("cpu"), f"expected state_dict of pretrained model to be on cpu; instead is {value.device}"
-        torch.save({'mamba_state_dict': state_dict}, args.model_path + args.state_dict_out)
-        os.remove(tmp_ckpt_file)
-        print("done")
+    if args.state_dict_out is not None:
+        if trainer.is_global_zero:
+            print("storing the model parameters")
+        tmp_ckpt_file = 'tmp_ckpt'
+        trainer.save_checkpoint(tmp_ckpt_file)
+        if trainer.is_global_zero:
+            tmp_ckpt = torch.load(tmp_ckpt_file)
+            state_dict = tmp_ckpt['state_dict']
+            state_dict = {re.search(r'^[^.]*\.(.*)', key).group(1): value for key, value in state_dict.items()}
+            for (key, value) in state_dict.items():
+                assert type(key) is not torch.Tensor
+                assert type(value) is torch.Tensor
+                assert value.device == torch.device("cpu"), f"expected state_dict of pretrained model to be on cpu; instead is {value.device}"
+            torch.save({'mamba_state_dict': state_dict}, args.model_path + args.state_dict_out)
+            os.remove(tmp_ckpt_file)
+            print("done")
 
 
 if __name__ == '__main__':
@@ -235,7 +249,7 @@ if __name__ == '__main__':
     ftune_sp = subparsers.add_parser("finetune", help="finetune model")
     ftune_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
     ftune_sp.add_argument("--state-dict-in", default="/mamba_state_dict.pth", help="input state dict file name")
-    ftune_sp.add_argument("--state-dict-out", default="/mamba_state_dict.pth", help="output state dict file name")
+    ftune_sp.add_argument("--state-dict-out", default=None, help="output state dict file name")
     ftune_sp.add_argument("--slimpajama-path", default="/scratch/niklas/SlimPajama-627B", help="set path of slimpajama dataset")
     ftune_sp.set_defaults(func=ftune)
 
