@@ -6,7 +6,7 @@ import re
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import DataLoader, Dataset, IterableDataset
 
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -18,7 +18,7 @@ from datasets import load_dataset, load_from_disk
 
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
 from mamba_ssm.models.config_mamba import MambaConfig
-from mamba_ssm.modules.block import Block
+# from mamba_ssm.modules.block import Block
 
 
 def get(args):
@@ -43,6 +43,9 @@ def get(args):
                  "HF_CACHE env variable not set; set to huggingface cache path"
         # TODO check if dataset exists, else print git clone command
         ds = load_dataset(args.slimpajama_path, num_proc=64) #, streaming=True,)
+
+    # cache dataset for perplexity measurement
+    ppls_ds = load_dataset("PY007/tokenized_proof_pile_test_neox", split="test")
 
 
 class SlimPajamaWrapper(IterableDataset):
@@ -124,8 +127,8 @@ class LitMamboros(L.LightningModule):
     def forward(self, inpts):
         return self.mamboros(inpts).logits
 
-    # def predict_step(self, batch):
-    #     raise NotImplementedError()
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        return self(batch)
 
     def training_step(self, batch, batch_idx):
         inpts, trgts = batch
@@ -179,7 +182,7 @@ def ftune(args):
     length = 4096
     sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, length, batch_size_train, batch_size_val, 42)
 
-    ssm_cfg = {'layer': 'Mamba1'}
+    ssm_cfg = {'max_hstate_trnsf_cnt': 0}
     hf_config = torch.load(args.model_path + "/mamba_config.pth")
     mamba_config = MambaConfig(n_layer=hf_config['n_layer'], d_model=hf_config['d_model'], vocab_size=hf_config['vocab_size'],
                                ssm_cfg=ssm_cfg, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
@@ -236,6 +239,177 @@ def ftune(args):
             print("done")
 
 
+class PPLAnalysesDS(Dataset):
+    def __init__(self, context_length=None, pseudo_context_length=None, batch_size=None, size=100):
+        ppls_ds = load_dataset("PY007/tokenized_proof_pile_test_neox", split="test")
+        ppls_ds = ppls_ds.filter(lambda x: x["tokenized_len"] >= 32768, num_proc=64)
+        ppls_ds = ppls_ds[:size]
+        self.encoded_texts = ppls_ds["input_ids"]
+
+        # for i, t in enumerate(self.encoded_texts):
+        #     print(f"{i}: {t[:20]}")
+        #     if i > 5:
+        #         break
+
+        self.context_length = context_length
+        self.pseudo_context_length = pseudo_context_length
+        self.batch_size = batch_size
+        self.size = size
+
+    def context_length_ratio(self):
+        return self.pseudo_context_length // self.context_length
+
+    def config(self, context_length, pseudo_context_length, batch_size):
+        self.context_length = context_length
+        self.pseudo_context_length = pseudo_context_length
+        assert self.pseudo_context_length % self.context_length == 0, "expect pseudo_context_length to be multiple of context_length"
+        self.batch_size = batch_size
+        assert self.size % self.batch_size == 0, "expect batch_size to be multiple of size"
+
+    def __len__(self):
+        return self.size * self.context_length_ratio()
+
+    def __getitem__(self, idx):
+        mamboros_batch_idx = idx // (self.batch_size * self.context_length_ratio())
+        local_idx = idx % (self.batch_size * self.context_length_ratio())
+
+        seq_idx = mamboros_batch_idx * self.batch_size + local_idx % self.batch_size
+        seq_element_idx = local_idx // self.batch_size
+
+        start_range = seq_element_idx * self.context_length
+        end_range = start_range + self.context_length
+
+        inpt = self.encoded_texts[seq_idx][start_range:end_range]
+        trgt = self.encoded_texts[seq_idx][start_range+1:end_range+1]
+        # print(f"DEBUG: seq_idx {seq_idx}")
+        # print(f"DEBUG: seq_element_idx {seq_element_idx}")
+        # print(f"DEBUG: start_range {start_range}")
+        # print(f"DEBUG: end_range {end_range}")
+        return (torch.tensor(inpt), torch.tensor(trgt))
+
+    def test_dataset():
+        context_length = 1024
+        pseudo_context_length = 3 * context_length
+        batch_size = 4
+
+        ppl_ds = PPLAnalysesDS(size=12)
+        ppl_ds.config(context_length, pseudo_context_length, batch_size)
+
+        test_vectors = [
+                # item-idx, seq-idx, start-range, end_range
+                [0, 0, 0, 1024],
+                [1, 1, 0, 1024],
+                [2, 2, 0, 1024],
+                [3, 3, 0, 1024],
+                [4, 0, 1024, 2048],
+                [5, 1, 1024, 2048],
+                [6, 2, 1024, 2048],
+                [7, 3, 1024, 2048],
+                [8, 0, 2048, 3072],
+                [9, 1, 2048, 3072],
+                [10, 2, 2048, 3072],
+                [11, 3, 2048, 3072],
+                [12, 4, 0, 1024],
+                [13, 5, 0, 1024],
+                [14, 6, 0, 1024],
+                [15, 7, 0, 1024],
+                [16, 4, 1024, 2048],
+                [17, 5, 1024, 2048],
+                [18, 6, 1024, 2048],
+                [19, 7, 1024, 2048],
+                [20, 4, 2048, 3072],
+                [21, 5, 2048, 3072],
+                [22, 6, 2048, 3072],
+                [23, 7, 2048, 3072],
+                [24, 8, 0, 1024],
+            ]
+
+        for i, (item_idx, seq_idx, seq_start_range, seq_end_range) in enumerate(test_vectors):
+            print(f"test 1.{i} (item_idx {item_idx})")
+            # print(f"seq_idx {seq_idx}")
+            # print(f"seq_start_range {seq_start_range}")
+            # print(f"seq_end_range {seq_end_range}")
+
+            (inpt, trgt) = ppl_ds.__getitem__(item_idx)
+            inpt2 = torch.tensor(ppl_ds.encoded_texts[seq_idx][seq_start_range:seq_end_range])
+            trgt2 = torch.tensor(ppl_ds.encoded_texts[seq_idx][seq_start_range+1:seq_end_range+1])
+
+            # print("inpt")
+            # print(inpt[:10], inpt[-10:])
+            # print(inpt2[:10], inpt2[-10:])
+
+            # print("trgt")
+            # print(trgt[:10], trgt[-10:])
+            # print(trgt2[:10], trgt2[-10:])
+
+            # print(len(inpt))
+            # print(len(trgt))
+            # print("")
+
+            assert torch.equal(inpt, inpt2)
+            assert torch.equal(trgt, trgt2)
+            assert len(inpt) == context_length
+            assert len(trgt) == context_length
+
+
+        test_vectors2 = [
+                # [item_idxs], seq_idx, start_range, end_range
+                [[0, 4, 8], 0, 0, 3072],
+                [[1, 5, 9], 1, 0, 3072],
+                [[2, 6, 10], 2, 0, 3072],
+                [[3, 7, 11], 3, 0, 3072],
+                [[12, 16, 20], 4, 0, 3072],
+            ]
+        for i, (item_idxs, seq_idx, start_range, end_range) in enumerate(test_vectors2):
+            print(f"test 2.{i}")
+            inpt = torch.cat(tuple(ppl_ds.__getitem__(item_idx)[0] for item_idx in item_idxs))
+            # inpt = []
+            # for item_idx in item_idxs:
+            #     inpt = inpt + ppl_ds.__getitem__(item_idx)[0]
+
+            assert torch.equal(inpt, torch.tensor(ppl_ds.encoded_texts[seq_idx][start_range:end_range]))
+            assert len(inpt) == end_range - start_range
+
+        print("PPLAnalysisDS dataset test successful!")
+
+    def test_dataloader():
+        context_length = 1024
+        pseudo_context_length = 3 * context_length
+        batch_size = 4
+
+        ppl_ds = PPLAnalysesDS(size=12)
+        ppl_ds.config(context_length, pseudo_context_length, batch_size)
+
+        dl = DataLoader(ppl_ds, batch_size=batch_size, shuffle=False)
+
+        for i, (inpts, trgts) in enumerate(dl):
+            print(f"test dataloader batch {i}")
+
+            idxs = list(range(i * batch_size, i * batch_size + batch_size))
+            inpts2 = torch.stack(tuple(ppl_ds.__getitem__(idx)[0] for idx in idxs), dim=0)
+            trgts2 = torch.stack(tuple(ppl_ds.__getitem__(idx)[1] for idx in idxs), dim=0)
+
+            # print(inpts)
+            # print(inpts2)
+
+            assert torch.equal(inpts, inpts2)
+            assert torch.equal(trgts, trgts2)
+            assert inpts.shape == inpts2.shape
+            assert trgts.shape == trgts2.shape
+
+        print("PPLAnalysisDS dataloader test successful!")
+
+
+def ppl_analysis(args):
+    context_length = 1024
+
+    # test perplexity analsysi dataset/dataloader
+    if args.check_ds_dl:
+        PPLAnalysesDS.test_dataset()
+        PPLAnalysesDS.test_dataloader()
+    raise NotImplementedError()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog="mamboros_ftuning")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
@@ -252,6 +426,12 @@ if __name__ == '__main__':
     ftune_sp.add_argument("--state-dict-out", default=None, help="output state dict file name")
     ftune_sp.add_argument("--slimpajama-path", default="/scratch/niklas/SlimPajama-627B", help="set path of slimpajama dataset")
     ftune_sp.set_defaults(func=ftune)
+
+    ppl_sp = subparsers.add_parser("compute-ppl", help="compute perplexity over context length")
+    ppl_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
+    ppl_sp.add_argument("--state-dict", default="/mamba_state_dict.pth", help="state dict file name")
+    ppl_sp.add_argument("--check-ds-dl", action="store_true", help="check dataset/dataloader of perplexity analysis")
+    ppl_sp.set_defaults(func=ppl_analysis)
 
     args = parser.parse_args()
     args.func(args)
