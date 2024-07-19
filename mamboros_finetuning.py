@@ -4,6 +4,7 @@ import random
 import re
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
@@ -506,6 +507,24 @@ def ppl_analysis(args):
     print(f"Perplexity analysis completed (data saved to the file {args.file})")
 
 
+def ppl_vis_gen(args):
+    ppl_np = np.load(args.file)
+
+    x_axis = np.arange(1, ppl_np.shape[1]+1)
+    y_axis = np.median(ppl_np, axis=0)
+    # print(y_axis.shape)
+    # print(y_axis[100:130])
+
+    plt.scatter(x_axis, y_axis, marker='.', s=6)
+    plt.grid(True)
+    plt.xlabel("Context Length")
+    plt.ylabel("Log of Median Perplexity")
+    plt.yscale("log")
+
+    plt.savefig(args.fig_file, dpi=500, bbox_inches='tight')
+    print(f"plot {args.fig_file} created")
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog="mamboros_ftuning")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
@@ -529,6 +548,11 @@ if __name__ == '__main__':
     ppl_sp.add_argument("--check-ds-dl", action="store_true", help="check dataset/dataloader of perplexity analysis")
     ppl_sp.add_argument("--file", default="ppl_analysis.npy", help="numpy output file path")
     ppl_sp.set_defaults(func=ppl_analysis)
+
+    ppl_vis_sp = subparsers.add_parser("generate-ppl-vis", help="generate visualization of perplexity analysis")
+    ppl_vis_sp.add_argument("--file", default="ppl_analysis.npy", help="numpy input file path")
+    ppl_vis_sp.add_argument("--fig-file", default="fig.png", help="figure output file path")
+    ppl_vis_sp.set_defaults(func=ppl_vis_gen)
 
     args = parser.parse_args()
     args.func(args)
