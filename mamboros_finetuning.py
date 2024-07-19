@@ -3,6 +3,8 @@ import os
 import random
 import re
 
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -127,8 +129,14 @@ class LitMamboros(L.LightningModule):
     def forward(self, inpts):
         return self.mamboros(inpts).logits
 
-    def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        return self(batch)
+    def predict_step(self, batch, batch_idx):
+        match batch:
+            case (inpt, trgt):
+                preds = self(inpt)
+                cross_entropy = torch.nn.functional.cross_entropy(preds.view(-1, preds.size(-1)), trgt.view(-1), reduction='none')
+                return cross_entropy.view(trgt.shape)
+            case inpt:
+                return self(inpt)
 
     def training_step(self, batch, batch_idx):
         inpts, trgts = batch
@@ -262,7 +270,8 @@ class PPLAnalysesDS(Dataset):
     def config(self, context_length, pseudo_context_length, batch_size):
         self.context_length = context_length
         self.pseudo_context_length = pseudo_context_length
-        assert self.pseudo_context_length % self.context_length == 0, "expect pseudo_context_length to be multiple of context_length"
+        assert self.pseudo_context_length % self.context_length == 0, f"expect pseudo_context_length ({self.pseudo_context_length}) to be multiple of context_length ({self.context_length})"
+        assert self.pseudo_context_length >= self.context_length, "expect pseudo_context_length to be at least context_length"
         self.batch_size = batch_size
         assert self.size % self.batch_size == 0, "expect batch_size to be multiple of size"
 
@@ -289,13 +298,62 @@ class PPLAnalysesDS(Dataset):
 
     def test_dataset():
         context_length = 1024
-        pseudo_context_length = 3 * context_length
+        pseudo_context_length = context_length
         batch_size = 4
 
         ppl_ds = PPLAnalysesDS(size=12)
+
+        # test context_length equal to pseudo_context_length
         ppl_ds.config(context_length, pseudo_context_length, batch_size)
 
-        test_vectors = [
+        test_vectors0 = [
+                # item-idx, seq-idx, start-range, end_range
+                [0, 0, 0, 1024],
+                [1, 1, 0, 1024],
+                [2, 2, 0, 1024],
+                [3, 3, 0, 1024],
+                [4, 4, 0, 1024],
+                [5, 5, 0, 1024],
+                [6, 6, 0, 1024],
+                [7, 7, 0, 1024],
+                [8, 8, 0, 1024],
+                [9, 9, 0, 1024],
+                [10, 10, 0, 1024],
+                [11, 11, 0, 1024],
+                # [12, 12, 0, 1024],
+            ]
+
+        for i, (item_idx, seq_idx, seq_start_range, seq_end_range) in enumerate(test_vectors0):
+            print(f"test 1.{i} (item_idx {item_idx})")
+            # print(f"seq_idx {seq_idx}")
+            # print(f"seq_start_range {seq_start_range}")
+            # print(f"seq_end_range {seq_end_range}")
+
+            (inpt, trgt) = ppl_ds.__getitem__(item_idx)
+            inpt2 = torch.tensor(ppl_ds.encoded_texts[seq_idx][seq_start_range:seq_end_range])
+            trgt2 = torch.tensor(ppl_ds.encoded_texts[seq_idx][seq_start_range+1:seq_end_range+1])
+
+            # print("inpt")
+            # print(inpt[:10], inpt[-10:])
+            # print(inpt2[:10], inpt2[-10:])
+
+            # print("trgt")
+            # print(trgt[:10], trgt[-10:])
+            # print(trgt2[:10], trgt2[-10:])
+
+            # print(len(inpt))
+            # print(len(trgt))
+            # print("")
+
+            assert torch.equal(inpt, inpt2)
+            assert torch.equal(trgt, trgt2)
+            assert len(inpt) == context_length
+            assert len(trgt) == context_length
+
+        pseudo_context_length = 3 * context_length
+        ppl_ds.config(context_length, pseudo_context_length, batch_size)
+
+        test_vectors2 = [
                 # item-idx, seq-idx, start-range, end_range
                 [0, 0, 0, 1024],
                 [1, 1, 0, 1024],
@@ -324,8 +382,8 @@ class PPLAnalysesDS(Dataset):
                 [24, 8, 0, 1024],
             ]
 
-        for i, (item_idx, seq_idx, seq_start_range, seq_end_range) in enumerate(test_vectors):
-            print(f"test 1.{i} (item_idx {item_idx})")
+        for i, (item_idx, seq_idx, seq_start_range, seq_end_range) in enumerate(test_vectors2):
+            print(f"test 2.{i} (item_idx {item_idx})")
             # print(f"seq_idx {seq_idx}")
             # print(f"seq_start_range {seq_start_range}")
             # print(f"seq_end_range {seq_end_range}")
@@ -352,7 +410,7 @@ class PPLAnalysesDS(Dataset):
             assert len(trgt) == context_length
 
 
-        test_vectors2 = [
+        test_vectors3 = [
                 # [item_idxs], seq_idx, start_range, end_range
                 [[0, 4, 8], 0, 0, 3072],
                 [[1, 5, 9], 1, 0, 3072],
@@ -360,8 +418,8 @@ class PPLAnalysesDS(Dataset):
                 [[3, 7, 11], 3, 0, 3072],
                 [[12, 16, 20], 4, 0, 3072],
             ]
-        for i, (item_idxs, seq_idx, start_range, end_range) in enumerate(test_vectors2):
-            print(f"test 2.{i}")
+        for i, (item_idxs, seq_idx, start_range, end_range) in enumerate(test_vectors3):
+            print(f"test 3.{i}")
             inpt = torch.cat(tuple(ppl_ds.__getitem__(item_idx)[0] for item_idx in item_idxs))
             # inpt = []
             # for item_idx in item_idxs:
@@ -402,12 +460,50 @@ class PPLAnalysesDS(Dataset):
 
 def ppl_analysis(args):
     context_length = 1024
+    pseudo_context_length = 20 * context_length
+    context_length_ratio = pseudo_context_length // context_length
+    batch_size = 5
+    test_batch_count = 100
 
-    # test perplexity analsysi dataset/dataloader
+    # test perplexity analysis dataset/dataloader
     if args.check_ds_dl:
         PPLAnalysesDS.test_dataset()
         PPLAnalysesDS.test_dataloader()
-    raise NotImplementedError()
+    ppl_ds = PPLAnalysesDS(size=batch_size*test_batch_count)
+
+    torch.set_float32_matmul_precision('medium')
+
+    hf_config = torch.load(args.model_path + "/mamba_config.pth")
+    pretrained_state_dict = torch.load(args.model_path + args.state_dict)['mamba_state_dict']
+
+    ppl_ds.config(context_length, pseudo_context_length, batch_size)
+    dl = DataLoader(ppl_ds, batch_size=batch_size)
+
+    hstate_trnsf_cnt = context_length_ratio - 1
+    ssm_cfg = {'max_hstate_trnsf_cnt': hstate_trnsf_cnt}
+    mamba_config = MambaConfig(n_layer=hf_config['n_layer'], d_model=hf_config['d_model'], vocab_size=hf_config['vocab_size'],
+                               ssm_cfg=ssm_cfg, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
+                               pad_vocab_size_multiple=1)
+    mamboros = MambaLMHeadModel(mamba_config)
+    mamboros.load_state_dict(pretrained_state_dict)
+    l_mamboros = LitMamboros(mamboros, None, None, None, None, None, None)
+
+    trainer = L.Trainer(max_epochs=1, devices=1, accelerator="gpu",
+                        # limit_predict_batches=context_length_ratio*5,
+                        precision='bf16-mixed')
+
+    cross_entropy = trainer.predict(l_mamboros, dl)
+
+    cross_entropy = torch.stack(cross_entropy, dim=0)
+    cross_entropy = cross_entropy.view([-1, context_length_ratio] + list(cross_entropy.shape)[1:])
+    cross_entropy = torch.transpose(cross_entropy, 1, 2)
+    cross_entropy = cross_entropy.reshape([cross_entropy.size(0) * cross_entropy.size(1), cross_entropy.size(2) * cross_entropy.size(3)])
+
+    ppl = torch.exp(cross_entropy)
+
+    ppl_np = ppl.numpy()
+    np.save(args.file, ppl_np)
+    print(f"Perplexity analysis completed (data saved to the file {args.file})")
 
 
 if __name__ == '__main__':
@@ -431,6 +527,7 @@ if __name__ == '__main__':
     ppl_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
     ppl_sp.add_argument("--state-dict", default="/mamba_state_dict.pth", help="state dict file name")
     ppl_sp.add_argument("--check-ds-dl", action="store_true", help="check dataset/dataloader of perplexity analysis")
+    ppl_sp.add_argument("--file", default="ppl_analysis.npy", help="numpy output file path")
     ppl_sp.set_defaults(func=ppl_analysis)
 
     args = parser.parse_args()
