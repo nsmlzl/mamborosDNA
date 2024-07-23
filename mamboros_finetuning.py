@@ -134,11 +134,35 @@ class SlimPajamaDataModule(L.LightningDataModule):
 
     def testbench(args):
         length = 1024
-        pseudo_length = 3 * length
-        length_ratio = pseudo_length // length
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path + "/tokenizer.pth")
         batch_size_train = 5
         batch_size_val = 1
-        tokenizer = AutoTokenizer.from_pretrained(args.model_path + "/tokenizer.pth")
+
+        # test pseudo_length equal to length
+        pseudo_length = length
+
+        length_ratio = pseudo_length // length
+        sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
+        sp_datamodule.setup()
+        dl = sp_datamodule.train_dataloader()
+
+        for i, (mamboros_batch_inpt, mamboros_batch_trgt) in enumerate(dl):
+            for i2 in range(batch_size_train):
+                ref = dl.dataset.buffer[i2]
+
+                assert torch.equal(mamboros_batch_inpt[i2,:], ref[:-1])
+                assert torch.equal(mamboros_batch_trgt[i2,:], ref[1:])
+            print(f"1.{i} inpt and trgt match with reference")
+
+            if i >= 10:
+                break
+
+        print("Mamboros dataloader working as expected for pseudo_length==length!")
+
+        # test pseudo_length multiple of length
+        pseudo_length = 3 * length
+
+        length_ratio = pseudo_length // length
         sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
         sp_datamodule.setup()
         dl = sp_datamodule.train_dataloader()
@@ -166,16 +190,16 @@ class SlimPajamaDataModule(L.LightningDataModule):
 
                     assert torch.equal(mamboros_batch_inpt[i2,:], ref[:-1])
                     assert torch.equal(mamboros_batch_trgt[i2,:], ref[1:])
-                print(f"{i//length_ratio} inpt and trgt match with reference")
+                print(f"2.{i//length_ratio} inpt and trgt match with reference")
 
                 mamboros_batch_inpt = None
                 mamboros_batch_trgt = None
 
 
-            if i > 5 * length_ratio + 1:
+            if i >= 10 * length_ratio + 1:
                 break
 
-        print("Mamboros dataloader working as expected!")
+        print("Mamboros dataloader working as expected for pseudo_length>length!")
 
 
 class LitMamboros(L.LightningModule):
