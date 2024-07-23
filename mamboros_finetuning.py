@@ -52,40 +52,63 @@ def get(args):
 
 
 class SlimPajamaWrapper(IterableDataset):
-    def __init__(self, sp_path, tokenizer, length, seed=42, split='train'):
+    def __init__(self, sp_path, tokenizer, pseudo_length, length, batch_size, seed=42, split='train'):
         self.sp = load_dataset(sp_path, streaming=True, split=split).shuffle(seed, buffer_size=100000)
         self.sp_iter = iter(self.sp)
         self.tokenizer = tokenizer
+        self.pseudo_length = pseudo_length
         self.length = length
+        assert self.pseudo_length % self.length == 0, f"expect pseudo_length ({self.pseudo_length}) to be multiple of length ({self.length})"
+        assert self.pseudo_length >= self.length, "expect pseudo_length to be greater or equal to length"
+        self.length_ratio = self.pseudo_length // self.length
+        self.batch_size = batch_size
         self.rng = random.Random()
         self.rng.seed(seed)
+        self.buffer = [None] * self.batch_size
+        self.sub_iter_idx = 0
 
     def __iter__(self):
-        for e in self.sp_iter:
-            txt = e['text']
-            inpt_id = torch.tensor(self.tokenizer(txt)['input_ids'])
-            # string is long enough
-            if len(inpt_id) > self.length:
-                # string too long; use only slice of it
-                if len(inpt_id) > self.length + 1:
-                    max_offset = len(inpt_id) - self.length - 1
-                    offset = self.rng.randint(0, max_offset)
-                    inpt_id = inpt_id[offset:offset+self.length+1]
-                assert len(inpt_id) == self.length + 1, f"inpt_id list has incorrect length {len(inpt_id)}"
-                inpt = inpt_id[:-1]
-                assert len(inpt) == self.length, f"inpt list has incorrect length {len(inpt)}"
-                trgt = inpt_id[1:]
-                assert len(trgt) == self.length, f"trgt list has incorrect length {len(trgt)}"
-                yield (inpt, trgt)
-            # else:
-                # print("tokenized string not long enough")
+        while True:
+            if self.sub_iter_idx >= (self.batch_size * self.length_ratio):
+                self.sub_iter_idx = 0
+                self.buffer = [None] * self.batch_size
+
+            # fill buffer if empty
+            for i in range(len(self.buffer)):
+                while self.buffer[i] is None:
+                    # TODO handle finished iterator (StopIteration exception)
+                    txt = next(self.sp_iter)['text']
+                    inpt_id = torch.tensor(self.tokenizer(txt)['input_ids'])
+                    # string is long enough
+                    if len(inpt_id) > self.pseudo_length:
+                        # string too long; use only slice of it
+                        if len(inpt_id) > self.pseudo_length + 1:
+                            max_offset = len(inpt_id) - self.pseudo_length - 1
+                            offset = self.rng.randint(0, max_offset)
+                            inpt_id = inpt_id[offset:offset+self.pseudo_length+1]
+                        assert len(inpt_id) == self.pseudo_length + 1, f"inpt_id list has incorrect length {len(inpt_id)}"
+                        self.buffer[i] = inpt_id
+
+            buffer_idx = self.sub_iter_idx % self.batch_size
+            buffer_element = self.sub_iter_idx // self.batch_size
+
+            range_start = buffer_element * self.length
+            range_end = range_start + self.length
+            inpt = self.buffer[buffer_idx][range_start:range_end].clone()
+            trgt = self.buffer[buffer_idx][range_start+1:range_end+1].clone()
+            assert len(inpt) == self.length, f"inpt has incorrect length {len(inpt)}"
+            assert len(trgt) == self.length, f"trgt has incorrect length {len(trgt)}"
+
+            self.sub_iter_idx += 1
+            yield (inpt, trgt)
 
 
 class SlimPajamaDataModule(L.LightningDataModule):
-    def __init__(self, ds_path, tokenizer, length, batch_size_train, batch_size_val, batch_size_test, seed=42):
+    def __init__(self, ds_path, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, batch_size_test, seed=42):
         super().__init__()
         self.ds_path = ds_path
         self.tokenizer = tokenizer
+        self.pseudo_length = pseudo_length
         self.length = length
         self.batch_size_train = batch_size_train
         self.batch_size_val = batch_size_val
@@ -95,10 +118,10 @@ class SlimPajamaDataModule(L.LightningDataModule):
     def setup(self, stage=None):
         if dist.is_initialized():
             self.seed = self.seed + dist.get_rank()
-        self.ds_train = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.length, seed=self.seed, split='train')
-        # self.ds_train = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.length, seed=self.seed, split='test')
-        # self.ds_test = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.length, seed=self.seed, split='test')
-        # self.ds_val = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.length, seed=self.seed, split='validation')
+        self.ds_train = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.pseudo_length, self.length, batch_size=self.batch_size_train, seed=self.seed, split='train')
+        # self.ds_train = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.pseudo_length, self.length, batch_size=self.batch_size_train, seed=self.seed, split='test')
+        # self.ds_test = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.pseudo_length, self.length, batch_size=self.batch_size_test, seed=self.seed, split='test')
+        # self.ds_val = SlimPajamaWrapper(self.ds_path, self.tokenizer, self.pseudo_length, self.length, batch_size=self.batch_size_val, seed=self.seed, split='validation')
 
     def train_dataloader(self):
         return DataLoader(self.ds_train, batch_size=self.batch_size_train)
@@ -108,6 +131,51 @@ class SlimPajamaDataModule(L.LightningDataModule):
 
     # def test_dataloader(self):
     #     return DataLoader(self.ds_test, batch_size=self.batch_size_test)
+
+    def testbench(args):
+        length = 1024
+        pseudo_length = 3 * length
+        length_ratio = pseudo_length // length
+        batch_size_train = 5
+        batch_size_val = 1
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path + "/tokenizer.pth")
+        sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
+        sp_datamodule.setup()
+        dl = sp_datamodule.train_dataloader()
+
+        mamboros_batch_inpt = None
+        mamboros_batch_trgt = None
+        for i, (inpt, trgt) in enumerate(dl):
+            if mamboros_batch_inpt is None:
+                mamboros_batch_inpt = inpt
+                mamboros_batch_trgt = trgt
+            else:
+                mamboros_batch_inpt = torch.cat((mamboros_batch_inpt, inpt))
+                mamboros_batch_trgt = torch.cat((mamboros_batch_trgt, trgt))
+
+            print(f"{i} {inpt.shape} {mamboros_batch_inpt.shape}")
+            if i % length_ratio == length_ratio - 1:
+                mamboros_batch_inpt = mamboros_batch_inpt.view([-1, batch_size_train, length])
+                mamboros_batch_inpt = torch.transpose(mamboros_batch_inpt, 0, 1).reshape([-1, pseudo_length])
+
+                mamboros_batch_trgt = mamboros_batch_trgt.view([-1, batch_size_train, length])
+                mamboros_batch_trgt = torch.transpose(mamboros_batch_trgt, 0, 1).reshape([-1, pseudo_length])
+
+                for i2 in range(batch_size_train):
+                    ref = dl.dataset.buffer[i2]
+
+                    assert torch.equal(mamboros_batch_inpt[i2,:], ref[:-1])
+                    assert torch.equal(mamboros_batch_trgt[i2,:], ref[1:])
+                print(f"{i//length_ratio} inpt and trgt match with reference")
+
+                mamboros_batch_inpt = None
+                mamboros_batch_trgt = None
+
+
+            if i > 5 * length_ratio + 1:
+                break
+
+        print("Mamboros dataloader working as expected!")
 
 
 class LitMamboros(L.LightningModule):
@@ -165,6 +233,9 @@ class LitMamboros(L.LightningModule):
 
 
 def ftune(args):
+    if args.check_ds_dl:
+        SlimPajamaDataModule.testbench(args)
+
     torch.cuda.memory._record_memory_history(max_entries=500000)
 
     # training
@@ -540,6 +611,7 @@ if __name__ == '__main__':
     ftune_sp.add_argument("--state-dict-in", default="/mamba_state_dict.pth", help="input state dict file name")
     ftune_sp.add_argument("--state-dict-out", default=None, help="output state dict file name")
     ftune_sp.add_argument("--slimpajama-path", default="/scratch/niklas/SlimPajama-627B", help="set path of slimpajama dataset")
+    ftune_sp.add_argument("--check-ds-dl", action="store_true", help="check mamboros dataset/dataloader")
     ftune_sp.set_defaults(func=ftune)
 
     ppl_sp = subparsers.add_parser("compute-ppl", help="compute perplexity over context length")
