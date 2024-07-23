@@ -76,8 +76,10 @@ class SlimPajamaWrapper(IterableDataset):
             # fill buffer if empty
             for i in range(len(self.buffer)):
                 while self.buffer[i] is None:
-                    # TODO handle finished iterator (StopIteration exception)
-                    txt = next(self.sp_iter)['text']
+                    try:
+                        txt = next(self.sp_iter)['text']
+                    except StopIteration:
+                        return
                     inpt_id = torch.tensor(self.tokenizer(txt)['input_ids'])
                     # string is long enough
                     if len(inpt_id) > self.pseudo_length:
