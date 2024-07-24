@@ -265,13 +265,13 @@ def ftune(args):
     torch.cuda.memory._record_memory_history(max_entries=500000)
 
     # training
-    gpu_cnt = 3
-    max_epochs = 2
-    limit_train_batches = 4
-    limit_val_batches = 1
+    gpu_cnt = 6
+    max_epochs = 10
+    limit_train_batches = 4 * 50
+    limit_val_batches = 4 * 100
 
-    batch_size_train = 1
-    batch_size_val = 1
+    batch_size_train = 4
+    batch_size_val = 4
 
     # optimizer
     lr = 8e-3
@@ -285,10 +285,14 @@ def ftune(args):
 
     assert os.environ.get("HF_HOME") is not None, \
              "HF_CACHE env variable not set; set to huggingface cache path"
-    length = 4096
-    sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, length, batch_size_train, batch_size_val, 42)
+    length = args.context_length
+    pseudo_length = args.pseudo_context_length
+    length_ratio = pseudo_length // length
+    assert limit_train_batches % length_ratio == 0, f"limit_train_batches ({limit_train_batches}) expected to be multiple of length_ratio ({length_ratio})"
+    assert limit_val_batches % length_ratio == 0, f"limit_val_batches ({limit_val_batches}) expected to be multiple of length_ratio ({length_ratio})"
+    sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
 
-    ssm_cfg = {'max_hstate_trnsf_cnt': 0}
+    ssm_cfg = {'max_hstate_trnsf_cnt': length_ratio-1}
     hf_config = torch.load(args.model_path + "/mamba_config.pth")
     mamba_config = MambaConfig(n_layer=hf_config['n_layer'], d_model=hf_config['d_model'], vocab_size=hf_config['vocab_size'],
                                ssm_cfg=ssm_cfg, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
@@ -638,6 +642,8 @@ if __name__ == '__main__':
     ftune_sp.add_argument("--state-dict-out", default=None, help="output state dict file name")
     ftune_sp.add_argument("--slimpajama-path", default="/scratch/niklas/SlimPajama-627B", help="set path of slimpajama dataset")
     ftune_sp.add_argument("--check-ds-dl", action="store_true", help="check mamboros dataset/dataloader")
+    ftune_sp.add_argument("--context-length", default=1024, help="set context-length")
+    ftune_sp.add_argument("--pseudo-context-length", default=4096, help="set pseudo-context-length")
     ftune_sp.set_defaults(func=ftune)
 
     ppl_sp = subparsers.add_parser("compute-ppl", help="compute perplexity over context length")
