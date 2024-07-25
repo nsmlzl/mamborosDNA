@@ -267,14 +267,14 @@ def ftune(args):
     # training
     gpu_cnt = 6
     max_epochs = 10
-    limit_train_batches = 4 * 50
+    limit_train_batches = 4 * 10 #25 #50 #* 20
     limit_val_batches = 4 * 100
 
     batch_size_train = 4
     batch_size_val = 4
 
     # optimizer
-    lr = 8e-3
+    lr = 5e-5
     lr_scheduler_factor = 0.85
     weight_decay = 0.1
 
@@ -353,8 +353,10 @@ class PPLAnalysesDS(Dataset):
     def __init__(self, context_length=None, pseudo_context_length=None, batch_size=None, size=100):
         ppls_ds = load_dataset("PY007/tokenized_proof_pile_test_neox", split="test")
         ppls_ds = ppls_ds.filter(lambda x: x["tokenized_len"] >= 32768, num_proc=64)
+        assert len(ppls_ds) >= size, "not enough elements in ppls_ds"
         ppls_ds = ppls_ds[:size]
         self.encoded_texts = ppls_ds["input_ids"]
+        assert len(self.encoded_texts) == size, "expected {size} number of encoded_texts; got {self.encoded_texts.size(0)}"
 
         # for i, t in enumerate(self.encoded_texts):
         #     print(f"{i}: {t[:20]}")
@@ -642,8 +644,8 @@ if __name__ == '__main__':
     ftune_sp.add_argument("--state-dict-out", default=None, help="output state dict file name")
     ftune_sp.add_argument("--slimpajama-path", default="/scratch/niklas/SlimPajama-627B", help="set path of slimpajama dataset")
     ftune_sp.add_argument("--check-ds-dl", action="store_true", help="check mamboros dataset/dataloader")
-    ftune_sp.add_argument("--context-length", default=1024, help="set context-length")
-    ftune_sp.add_argument("--pseudo-context-length", default=4096, help="set pseudo-context-length")
+    ftune_sp.add_argument("--context-length", default=1024, type=int, help="set context-length")
+    ftune_sp.add_argument("--pseudo-context-length", default=4096, type=int, help="set pseudo-context-length")
     ftune_sp.set_defaults(func=ftune)
 
     ppl_sp = subparsers.add_parser("compute-ppl", help="compute perplexity over context length")
