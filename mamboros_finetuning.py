@@ -325,7 +325,10 @@ def ftune(args):
                         devices=gpu_cnt, accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="fsdp",
                         use_distributed_sampler=False, callbacks=[ckpt_cb])
-    trainer.fit(l_mamboros, datamodule=sp_datamodule)
+    try:
+        trainer.fit(l_mamboros, datamodule=sp_datamodule)
+    except KeyboardInterrupt:
+        print("caught KeyboardInterrupt")
 
     torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
     torch.cuda.memory._record_memory_history(enabled=None)
@@ -349,11 +352,78 @@ def ftune(args):
             print("done")
 
 
+def nih_analysis(args):
+    # context_length = 1024
+    # pseudo_context_length = 20 * context_length
+    # context_length_ratio = pseudo_context_length // context_length
+    torch.set_float32_matmul_precision('medium')
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path + "/tokenizer.pth")
+
+    hf_config = torch.load(args.model_path + "/mamba_config.pth")
+    pretrained_state_dict = torch.load(args.model_path + args.state_dict)['mamba_state_dict']
+
+    # hstate_trnsf_cnt = context_length_ratio - 1
+    ssm_cfg = {'max_hstate_trnsf_cnt': 0}
+    mamba_config = MambaConfig(n_layer=hf_config['n_layer'], d_model=hf_config['d_model'], vocab_size=hf_config['vocab_size'],
+                               ssm_cfg=ssm_cfg, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
+                               pad_vocab_size_multiple=1)
+    mamboros = MambaLMHeadModel(mamba_config)
+    mamboros.load_state_dict(pretrained_state_dict)
+    l_mamboros = LitMamboros(mamboros, None, None, None, None, None, None).cuda()
+
+    # inpt_txt = "Some unimportant information. The key is not '7'. The key is '4142'. The key not '41'. Some unimportant information.\nName the key." #What is the key?"
+
+    # Needle-In-Haystack benchmark based on LongLora paper
+    inpt_txt_start = "There is an important info hidden inside a lof of irrelevant text. Find it and memorize them. I will quiz you about the important information there.\n"
+    inpt_txt_rpt = "The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.\n"
+    # inpt_txt_pk = "The pass key is 12362. Remember it. 12362 is the pass key.\n"
+    # pk = 'crazy-monkey-flip-again'
+    pk = '1236277'
+    inpt_txt_pk = f"The pass key is '{pk}'. Remember it. '{pk}' is the pass key.\n"
+    inpt_txt_prompt = "What is the pass key? The pass key is"
+
+    print(len(tokenizer(inpt_txt_start, return_tensors='pt')['input_ids'][0,:]))
+    print(len(tokenizer(inpt_txt_rpt, return_tensors='pt')['input_ids'][0,:]))
+    print(len(tokenizer(inpt_txt_pk, return_tensors='pt')['input_ids'][0,:]))
+    print(len(tokenizer(inpt_txt_prompt, return_tensors='pt')['input_ids'][0,:]))
+
+    inpt_txt = inpt_txt_start + inpt_txt_rpt*7 + inpt_txt_pk + inpt_txt_rpt*41*8 + inpt_txt_prompt
+    # print(f"\nPROMPT:\n{inpt_txt}")
+
+    inpt_id = tokenizer(inpt_txt, return_tensors='pt')['input_ids'].cuda()
+    print(f"Length: {inpt_id[0].size(0)}")
+
+    l_mamboros.eval()
+    with torch.no_grad():
+        for i in range(inpt_id.size(0) + 20):
+            logits = l_mamboros(inpt_id)
+            _, pred = torch.max(logits, dim=2)
+
+            inpt_id = torch.cat((inpt_id[0,:], pred[0,-1:]))
+            inpt_id = inpt_id.view([-1, inpt_id.size(0)])
+    print(f"\nOUTPUT:\n{tokenizer.decode(inpt_id[0,-30:])}")
+    print(f"Correct PK: '{pk}'")
+
+    # inpt_id = tokenizer(inpt_txt, return_tensors='pt')['input_ids'].cuda()
+    # model = AutoModelForCausalLM.from_pretrained("state-spaces/mamba-2.8b-hf").cuda()
+    # out = model.generate(inpt_id, max_new_tokens=30)
+    # print("huggingface output:")
+    # print(out[0])
+    # print(tokenizer.decode(out[0]))
+
+    # out = inpt_id[0] #out[0] #inpt_id[0]
+    # for o in out:
+    #     dec = tokenizer.decode(o)
+    #     dec_ascii = [ord(char) for char in dec]
+    #     print(f"{o}: {dec} {dec_ascii}")
+
+
 class PPLAnalysesDS(Dataset):
     def __init__(self, context_length=None, pseudo_context_length=None, batch_size=None, size=100):
         ppls_ds = load_dataset("PY007/tokenized_proof_pile_test_neox", split="test")
-        ppls_ds = ppls_ds.filter(lambda x: x["tokenized_len"] >= 32768, num_proc=64)
-        assert len(ppls_ds) >= size, "not enough elements in ppls_ds"
+        ppls_ds = ppls_ds.filter(lambda x: x["tokenized_len"] >= 52000, num_proc=64)
+        assert len(ppls_ds) >= size, f"not enough elements in ppls_ds ({len(ppls_ds)})"
         ppls_ds = ppls_ds[:size]
         self.encoded_texts = ppls_ds["input_ids"]
         assert len(self.encoded_texts) == size, "expected {size} number of encoded_texts; got {self.encoded_texts.size(0)}"
@@ -564,7 +634,7 @@ class PPLAnalysesDS(Dataset):
 
 def ppl_analysis(args):
     context_length = 1024
-    pseudo_context_length = 20 * context_length
+    pseudo_context_length = 50 * context_length
     context_length_ratio = pseudo_context_length // context_length
     batch_size = 5
     test_batch_count = 100
@@ -647,6 +717,12 @@ if __name__ == '__main__':
     ftune_sp.add_argument("--context-length", default=1024, type=int, help="set context-length")
     ftune_sp.add_argument("--pseudo-context-length", default=4096, type=int, help="set pseudo-context-length")
     ftune_sp.set_defaults(func=ftune)
+
+    nih_sp = subparsers.add_parser("compute-nih", help="compute needle-in-haystack analysis.")
+    nih_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
+    # nih_sp.add_argument("--state-dict", default="/mamba_state_dict6.pth", help="input state dict file name")
+    nih_sp.add_argument("--state-dict", default="/mamba_state_dict.pth", help="input state dict file name")
+    nih_sp.set_defaults(func=nih_analysis)
 
     ppl_sp = subparsers.add_parser("compute-ppl", help="compute perplexity over context length")
     ppl_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
