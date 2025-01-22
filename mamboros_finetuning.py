@@ -19,12 +19,13 @@ from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from datasets import load_dataset, load_from_disk
 
-from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
-from mamba_ssm.models.config_mamba import MambaConfig
+#from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
+#from mamba_ssm.models.config_mamba import MambaConfig
 # from mamba_ssm.modules.block import Block
 
 
 def get(args):
+    print("cache pre-trained mamba model")
     hf_model = AutoModelForCausalLM.from_pretrained(args.hf_identifier)
     hf_state_dict = hf_model.to("cpu").state_dict()
     hf_state_dict['backbone.embedding.weight'] = hf_state_dict.pop('backbone.embeddings.weight')
@@ -36,18 +37,23 @@ def get(args):
                 'd_model': hf_config.hidden_size,
                 'vocab_size': hf_config.vocab_size}, args.model_path + "/mamba_config.pth")
 
+    print("cache tokenizer")
     hf_tokenizer = AutoTokenizer.from_pretrained(args.hf_identifier)
     hf_tokenizer.save_pretrained(args.model_path + "/tokenizer.pth")
 
     if args.prep_dataset is True:
+        print("NOTE:")
         print("download slimpajama dataset with `git clone --jobs=<N> https://huggingface.co/datasets/cerebras/SlimPajama-627B` and set corresponding argument.")
-        print("Note: `ulimit -n 8192`")
+        print("potentially need to run: `ulimit -n 8192`")
         assert os.environ.get("HF_HOME") is not None, \
-                 "HF_CACHE env variable not set; set to huggingface cache path"
+                 "HF_HOME env variable not set; set to huggingface cache path"
         # TODO check if dataset exists, else print git clone command
+        print("cache SlimPajama dataset")
         ds = load_dataset(args.slimpajama_path, num_proc=64) #, streaming=True,)
+        print("NOTE: feel free to remove SlimPajama repo; you can use it from local huggingface cache with identifier 'SlimPajama-627B'")
 
     # cache dataset for perplexity measurement
+    print("cache pile dataset")
     ppls_ds = load_dataset("PY007/tokenized_proof_pile_test_neox", split="test")
 
 
@@ -705,6 +711,7 @@ if __name__ == '__main__':
     get_sp = subparsers.add_parser("get", help="get pretrained model from huggingface")
     get_sp.add_argument("--hf-identifier", default="state-spaces/mamba-2.8b-hf", help="huggingface identifier")
     get_sp.add_argument("--model-path", default="model_store/", help="path to store model and tokenizer")
+    get_sp.add_argument("--slimpajama-path", default="/scratch/niklas/SlimPajama-627B", help="set path of slimpajama dataset")
     get_sp.add_argument("--prep-dataset", action="store_true", help="prepare/decompress dataset")
     get_sp.set_defaults(func=get)
 
