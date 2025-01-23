@@ -19,8 +19,8 @@ from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from datasets import load_dataset, load_from_disk
 
-#from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
-#from mamba_ssm.models.config_mamba import MambaConfig
+from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
+from mamba_ssm.models.config_mamba import MambaConfig
 # from mamba_ssm.modules.block import Block
 
 
@@ -50,6 +50,7 @@ def get(args):
         # TODO check if dataset exists, else print git clone command
         print("cache SlimPajama dataset")
         ds = load_dataset(args.slimpajama_path, num_proc=64) #, streaming=True,)
+        #ds = load_dataset("SlimPajama-627B", num_proc=64) #, streaming=True,)
         print("NOTE: feel free to remove SlimPajama repo; you can use it from local huggingface cache with identifier 'SlimPajama-627B'")
 
     # cache dataset for perplexity measurement
@@ -150,7 +151,7 @@ class SlimPajamaDataModule(L.LightningDataModule):
         pseudo_length = length
 
         length_ratio = pseudo_length // length
-        sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
+        sp_datamodule = SlimPajamaDataModule(args.slimpajama_identifier, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
         sp_datamodule.setup()
         dl = sp_datamodule.train_dataloader()
 
@@ -171,7 +172,7 @@ class SlimPajamaDataModule(L.LightningDataModule):
         pseudo_length = 3 * length
 
         length_ratio = pseudo_length // length
-        sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
+        sp_datamodule = SlimPajamaDataModule(args.slimpajama_identifier, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
         sp_datamodule.setup()
         dl = sp_datamodule.train_dataloader()
 
@@ -296,7 +297,7 @@ def ftune(args):
     length_ratio = pseudo_length // length
     assert limit_train_batches % length_ratio == 0, f"limit_train_batches ({limit_train_batches}) expected to be multiple of length_ratio ({length_ratio})"
     assert limit_val_batches % length_ratio == 0, f"limit_val_batches ({limit_val_batches}) expected to be multiple of length_ratio ({length_ratio})"
-    sp_datamodule = SlimPajamaDataModule(args.slimpajama_path, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
+    sp_datamodule = SlimPajamaDataModule(args.slimpajama_identifier, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
 
     ssm_cfg = {'max_hstate_trnsf_cnt': length_ratio-1}
     hf_config = torch.load(args.model_path + "/mamba_config.pth")
@@ -719,7 +720,7 @@ if __name__ == '__main__':
     ftune_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
     ftune_sp.add_argument("--state-dict-in", default="/mamba_state_dict.pth", help="input state dict file name")
     ftune_sp.add_argument("--state-dict-out", default=None, help="output state dict file name")
-    ftune_sp.add_argument("--slimpajama-path", default="/scratch/niklas/SlimPajama-627B", help="set path of slimpajama dataset")
+    ftune_sp.add_argument("--slimpajama-identifier", default="SlimPajama-627B", help="path or cache identifier of SlimPajama-627B dataset")
     ftune_sp.add_argument("--check-ds-dl", action="store_true", help="check mamboros dataset/dataloader")
     ftune_sp.add_argument("--context-length", default=1024, type=int, help="set context-length")
     ftune_sp.add_argument("--pseudo-context-length", default=4096, type=int, help="set pseudo-context-length")
