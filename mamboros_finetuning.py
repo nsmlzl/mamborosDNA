@@ -274,7 +274,7 @@ def ftune(args):
     # training
     gpu_cnt = 6
     max_epochs = 10
-    limit_train_batches = 4 * 10 #25 #50 #* 20
+    limit_train_batches = 4 * 2 #25 #50 #* 20
     limit_val_batches = 4 * 100
 
     batch_size_train = 4
