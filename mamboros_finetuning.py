@@ -2,6 +2,7 @@ import argparse
 import os
 import random
 import re
+import datetime
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -327,10 +328,11 @@ def ftune(args):
     # strategy = FSDPStrategy(sharding_strategy="SHARD_GRAD_OP", activation_checkpointing_policy=policy, auto_wrap_policy=policy)
     # strategy = FSDPStrategy(sharding_strategy="FULL_SHARD", activation_checkpointing_policy=policy, auto_wrap_policy=policy)
 
+    strategy = FSDPStrategy(timeout=datetime.timedelta(seconds=180))
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5, #gradient_clip_val=0.5, gradient_clip_algorithm="norm",
                         devices=gpu_cnt, accelerator="gpu",
-                        precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy="fsdp",
+                        precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy=strategy,
                         use_distributed_sampler=False, callbacks=[ckpt_cb])
     try:
         trainer.fit(l_mamboros, datamodule=sp_datamodule)
