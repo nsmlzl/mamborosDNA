@@ -6,6 +6,7 @@ import datetime
 
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import torch
 import torch.nn as nn
@@ -384,49 +385,125 @@ def nih_analysis(args):
 
     # inpt_txt = "Some unimportant information. The key is not '7'. The key is '4142'. The key not '41'. Some unimportant information.\nName the key." #What is the key?"
 
-    # Needle-In-Haystack benchmark based on LongLora paper
-    inpt_txt_start = "There is an important info hidden inside a lof of irrelevant text. Find it and memorize them. I will quiz you about the important information there.\n"
-    inpt_txt_rpt = "The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.\n"
-    # inpt_txt_pk = "The pass key is 12362. Remember it. 12362 is the pass key.\n"
-    # pk = 'crazy-monkey-flip-again'
-    pk = '1236277'
-    inpt_txt_pk = f"The pass key is '{pk}'. Remember it. '{pk}' is the pass key.\n"
-    inpt_txt_prompt = "What is the pass key? The pass key is"
+    clengths = np.arange(1000, 20001, 2000) #np.arange(1000, 10001, 1000)
+    depths = [0.1, 0.5, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9][::-1]
+    nbr_correct_retrievals = np.zeros((len(depths), len(clengths)))
 
-    print(len(tokenizer(inpt_txt_start, return_tensors='pt')['input_ids'][0,:]))
-    print(len(tokenizer(inpt_txt_rpt, return_tensors='pt')['input_ids'][0,:]))
-    print(len(tokenizer(inpt_txt_pk, return_tensors='pt')['input_ids'][0,:]))
-    print(len(tokenizer(inpt_txt_prompt, return_tensors='pt')['input_ids'][0,:]))
+    #nbr_correct_retrievals = 0
+    pks = ['1236277', 'crazy-eagle-six', '424242', '230596', 'Bahnhofsvorplatz', 'GACTAT', 'limpiaparabrisas', 'jms854', 'deep river cruise', 'Jamal Musiala']
 
-    inpt_txt = inpt_txt_start + inpt_txt_rpt*7 + inpt_txt_pk + inpt_txt_rpt*41*8 + inpt_txt_prompt
-    # print(f"\nPROMPT:\n{inpt_txt}")
+    for clen_idx in range(len(clengths)):
+        for dep_idx in range(len(depths)):
+            clen = clengths[clen_idx]
+            dep = depths[dep_idx]
 
-    inpt_id = tokenizer(inpt_txt, return_tensors='pt')['input_ids'].cuda()
-    print(f"Length: {inpt_id[0].size(0)}")
+            for pk in pks:
+                print("len tokenized passkey ('{}'): {}".format(pk, len(tokenizer(pk, return_tensors='pt')['input_ids'][0,:])))
 
-    l_mamboros.eval()
-    with torch.no_grad():
-        for i in range(inpt_id.size(0) + 20):
-            logits = l_mamboros(inpt_id)
-            _, pred = torch.max(logits, dim=2)
+                # Needle-In-Haystack benchmark based on LongLora paper
+                inpt_txt_start = "There is an important info hidden inside a lof of irrelevant text. Find it and memorize them. I will quiz you about the important information there.\n"
+                inpt_txt_rpt = "The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.\n"
+                # inpt_txt_pk = "The pass key is 12362. Remember it. 12362 is the pass key.\n"
+                # pk = 'crazy-monkey-flip-again'
+                inpt_txt_pk = f"The pass key is '{pk}'. Remember it. '{pk}' is the pass key.\n"
+                inpt_txt_prompt = "What is the pass key? The pass key is"
 
-            inpt_id = torch.cat((inpt_id[0,:], pred[0,-1:]))
-            inpt_id = inpt_id.view([-1, inpt_id.size(0)])
-    print(f"\nOUTPUT:\n{tokenizer.decode(inpt_id[0,-30:])}")
-    print(f"Correct PK: '{pk}'")
+                #print(len(tokenizer(inpt_txt_start, return_tensors='pt')['input_ids'][0,:]))
+                #print(len(tokenizer(inpt_txt_rpt, return_tensors='pt')['input_ids'][0,:]))
+                #print(len(tokenizer(inpt_txt_pk, return_tensors='pt')['input_ids'][0,:]))
+                #print(len(tokenizer(inpt_txt_prompt, return_tensors='pt')['input_ids'][0,:]))
+                strt_len = len(tokenizer(inpt_txt_start, return_tensors='pt')['input_ids'][0,:])
+                rpt_len = len(tokenizer(inpt_txt_rpt, return_tensors='pt')['input_ids'][0,:])
+                pk_len = len(tokenizer(inpt_txt_pk, return_tensors='pt')['input_ids'][0,:])
+                prpt_len = len(tokenizer(inpt_txt_prompt, return_tensors='pt')['input_ids'][0,:])
 
-    # inpt_id = tokenizer(inpt_txt, return_tensors='pt')['input_ids'].cuda()
-    # model = AutoModelForCausalLM.from_pretrained("state-spaces/mamba-2.8b-hf").cuda()
-    # out = model.generate(inpt_id, max_new_tokens=30)
-    # print("huggingface output:")
-    # print(out[0])
-    # print(tokenizer.decode(out[0]))
+                print("clen: {}; dep: {}".format(clen, dep))
+                nbr_rpt_before = int(( clen * dep - strt_len ) // rpt_len) + 1
+                nbr_rpt_after = int(( clen - strt_len - rpt_len * nbr_rpt_before - pk_len - prpt_len ) // rpt_len)+ 1
 
-    # out = inpt_id[0] #out[0] #inpt_id[0]
-    # for o in out:
-    #     dec = tokenizer.decode(o)
-    #     dec_ascii = [ord(char) for char in dec]
-    #     print(f"{o}: {dec} {dec_ascii}")
+                print("before: rpts {} -> len {}; after: rpts {}; total len {}".format(nbr_rpt_before, strt_len + rpt_len * nbr_rpt_before, nbr_rpt_after, strt_len + pk_len + prpt_len + (nbr_rpt_before + nbr_rpt_after) * rpt_len))
+
+                #inpt_txt = inpt_txt_start + inpt_txt_rpt*nbr_rpt_before + inpt_txt_pk + inpt_txt_rpt*nbr_rpt_after + inpt_txt_prompt
+                inpt_txt = inpt_txt_start + inpt_txt_rpt*nbr_rpt_before + inpt_txt_pk + inpt_txt_rpt*nbr_rpt_after + inpt_txt_prompt
+                # print(f"\nPROMPT:\n{inpt_txt}")
+
+                inpt_id = tokenizer(inpt_txt, return_tensors='pt')['input_ids'].cuda()
+                print(f"Length: {inpt_id[0].size(0)}")
+
+                l_mamboros.eval()
+                with torch.no_grad():
+
+
+                    #print("Mamboros debugging environment:")
+                    #print("inpt_id.shape {}".format(inpt_id.shape))
+
+                    #chunks = torch.split(inpt_id, 512, dim=1)
+                    #for i, chunk in enumerate(chunks):
+                        #print("{}: {}".format(i, chunk.shape))
+                        #logits = l_mamboros(chunk)
+
+
+                    for i in range(20):
+                        #print(i)
+                        logits = l_mamboros(inpt_id)
+                        _, pred = torch.max(logits, dim=2)
+
+                        inpt_id = torch.cat((inpt_id[0,:], pred[0,-1:]))
+                        inpt_id = inpt_id.view([-1, inpt_id.size(0)])
+                #print(f"\nOUTPUT:\n{tokenizer.decode(inpt_id[0,-30:])}")
+                #print(f"Correct PK: '{pk}'")
+
+                match = re.search(r"{}(['\"])(.*?)\1".format(re.escape(inpt_txt_prompt + ' ')),  tokenizer.decode(inpt_id[0,-40:]))
+                if match:
+                    extracted_key = match.group(2)
+                    if extracted_key == pk:
+                        nbr_correct_retrievals[dep_idx][clen_idx] += 1
+                        print("automatic pass key check passed: {}".format(pk))
+                    else:
+                        print("key located but wrong: expected key '{}'; output {}".format(pk, tokenizer.decode(inpt_id[0,-30:])))
+                else:
+                    print("unable to locate key: expected key '{}'; output {}".format(pk, tokenizer.decode(inpt_id[0,-30:])))
+
+                # inpt_id = tokenizer(inpt_txt, return_tensors='pt')['input_ids'].cuda()
+                # model = AutoModelForCausalLM.from_pretrained("state-spaces/mamba-2.8b-hf").cuda()
+                # out = model.generate(inpt_id, max_new_tokens=30)
+                # print("huggingface output:")
+                # print(out[0])
+                # print(tokenizer.decode(out[0]))
+
+                # out = inpt_id[0] #out[0] #inpt_id[0]
+                # for o in out:
+                #     dec = tokenizer.decode(o)
+                #     dec_ascii = [ord(char) for char in dec]
+                #     print(f"{o}: {dec} {dec_ascii}")
+            print("Correct retrieval rate: {}%".format(nbr_correct_retrievals[dep_idx][clen_idx] / len(pks) * 100))
+
+    nbr_correct_retrievals = nbr_correct_retrievals * 100. / len(pks)
+    print(nbr_correct_retrievals)
+
+    # create figure
+    fig, ax = plt.subplots()
+    cax = ax.imshow(nbr_correct_retrievals, cmap='RdYlGn', aspect='equal', vmin=0, vmax=100)
+
+    ax.set_xticks(np.arange(len(clengths)))
+    ax.set_yticks(np.arange(len(depths)))
+    ax.set_xticklabels(clengths)
+    ax.set_yticklabels([d * 100.0 for d in depths])
+    plt.xticks(rotation=45)
+
+    ax.set_xlabel("Context length")
+    ax.set_ylabel("Key depth (%)")
+
+    ax.set_xticks(np.arange(len(clengths) + 1) - 0.5, minor=True)
+    ax.set_yticks(np.arange(len(depths) + 1) - 0.5, minor=True)
+    ax.grid(which="minor", color="black", linestyle='-', linewidth=0.5)
+
+    divider = make_axes_locatable(ax)
+    cax_colorbar = divider.append_axes("right", size="5%", pad=0.1)
+    fig.colorbar(cax, cax=cax_colorbar)
+
+    plt.savefig(args.fig_file, dpi=500, bbox_inches='tight')
+    print(f"plot {args.fig_file} created")
 
 
 class PPLAnalysesDS(Dataset):
@@ -726,13 +803,14 @@ if __name__ == '__main__':
     ftune_sp.add_argument("--slimpajama-identifier", default="SlimPajama-627B", help="path or cache identifier of SlimPajama-627B dataset")
     ftune_sp.add_argument("--check-ds-dl", action="store_true", help="check mamboros dataset/dataloader")
     ftune_sp.add_argument("--context-length", default=1024, type=int, help="set context-length")
-    ftune_sp.add_argument("--pseudo-context-length", default=4096, type=int, help="set pseudo-context-length")
+    ftune_sp.add_argument("--pseudo-context-length", default=8192, type=int, help="set pseudo-context-length")
     ftune_sp.set_defaults(func=ftune)
 
     nih_sp = subparsers.add_parser("compute-nih", help="compute needle-in-haystack analysis.")
     nih_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
     # nih_sp.add_argument("--state-dict", default="/mamba_state_dict6.pth", help="input state dict file name")
     nih_sp.add_argument("--state-dict", default="/mamba_state_dict.pth", help="input state dict file name")
+    nih_sp.add_argument("--fig-file", default="fig.png", help="figure output file path")
     nih_sp.set_defaults(func=nih_analysis)
 
     ppl_sp = subparsers.add_parser("compute-ppl", help="compute perplexity over context length")
