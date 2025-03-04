@@ -28,13 +28,14 @@ from mamba_ssm.models.config_mamba import MambaConfig
 def get(args):
     print("cache pre-trained mamba model")
     hf_model = AutoModelForCausalLM.from_pretrained(args.hf_identifier)
+
     hf_state_dict = hf_model.to("cpu").state_dict()
     hf_state_dict['backbone.embedding.weight'] = hf_state_dict.pop('backbone.embeddings.weight')
     hf_config = AutoConfig.from_pretrained(args.hf_identifier)
 
     os.makedirs(os.path.dirname(args.model_path + '/'), exist_ok=True)
     torch.save({'mamba_state_dict': hf_state_dict}, args.model_path + "/mamba_state_dict.pth")
-    torch.save({'n_layer': hf_config.n_layer,
+    torch.save({'n_layer': hf_config.num_hidden_layers,
                 'd_model': hf_config.hidden_size,
                 'vocab_size': hf_config.vocab_size}, args.model_path + "/mamba_config.pth")
 
@@ -275,7 +276,7 @@ def ftune(args):
     # training
     gpu_cnt = 6
     max_epochs = 10
-    limit_train_batches = 4 * 2 #25 #50 #* 20
+    limit_train_batches = 8 * 2 #25 #50 #* 20
     limit_val_batches = 4 * 100
 
     batch_size_train = 4
@@ -300,7 +301,7 @@ def ftune(args):
     assert limit_val_batches % length_ratio == 0, f"limit_val_batches ({limit_val_batches}) expected to be multiple of length_ratio ({length_ratio})"
     sp_datamodule = SlimPajamaDataModule(args.slimpajama_identifier, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
 
-    ssm_cfg = {'max_hstate_trnsf_cnt': length_ratio-1}
+    ssm_cfg = {'layer': 'Mamba2', 'max_hstate_trnsf_cnt': length_ratio-1}
     hf_config = torch.load(args.model_path + "/mamba_config.pth")
     mamba_config = MambaConfig(n_layer=hf_config['n_layer'], d_model=hf_config['d_model'], vocab_size=hf_config['vocab_size'],
                                ssm_cfg=ssm_cfg, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
@@ -328,7 +329,7 @@ def ftune(args):
     # strategy = FSDPStrategy(sharding_strategy="SHARD_GRAD_OP", activation_checkpointing_policy=policy, auto_wrap_policy=policy)
     # strategy = FSDPStrategy(sharding_strategy="FULL_SHARD", activation_checkpointing_policy=policy, auto_wrap_policy=policy)
 
-    strategy = FSDPStrategy(timeout=datetime.timedelta(seconds=180))
+    strategy = FSDPStrategy(timeout=datetime.timedelta(seconds=600))
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5, #gradient_clip_val=0.5, gradient_clip_algorithm="norm",
                         devices=gpu_cnt, accelerator="gpu",
@@ -373,7 +374,7 @@ def nih_analysis(args):
     pretrained_state_dict = torch.load(args.model_path + args.state_dict)['mamba_state_dict']
 
     # hstate_trnsf_cnt = context_length_ratio - 1
-    ssm_cfg = {'max_hstate_trnsf_cnt': 0}
+    ssm_cfg = {'layer': 'Mamba2', 'max_hstate_trnsf_cnt': 0}
     mamba_config = MambaConfig(n_layer=hf_config['n_layer'], d_model=hf_config['d_model'], vocab_size=hf_config['vocab_size'],
                                ssm_cfg=ssm_cfg, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
                                pad_vocab_size_multiple=1)
@@ -663,7 +664,7 @@ def ppl_analysis(args):
     dl = DataLoader(ppl_ds, batch_size=batch_size)
 
     hstate_trnsf_cnt = context_length_ratio - 1
-    ssm_cfg = {'max_hstate_trnsf_cnt': hstate_trnsf_cnt}
+    ssm_cfg = {'layer': 'Mamba2', 'max_hstate_trnsf_cnt': hstate_trnsf_cnt}
     mamba_config = MambaConfig(n_layer=hf_config['n_layer'], d_model=hf_config['d_model'], vocab_size=hf_config['vocab_size'],
                                ssm_cfg=ssm_cfg, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
                                pad_vocab_size_multiple=1)
@@ -712,7 +713,7 @@ if __name__ == '__main__':
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     get_sp = subparsers.add_parser("get", help="get pretrained model from huggingface")
-    get_sp.add_argument("--hf-identifier", default="state-spaces/mamba-2.8b-hf", help="huggingface identifier")
+    get_sp.add_argument("--hf-identifier", default="AntonV/mamba2-2.7b-hf", help="huggingface identifier")
     get_sp.add_argument("--model-path", default="model_store/", help="path to store model and tokenizer")
     get_sp.add_argument("--slimpajama-path", default="/scratch/niklas/SlimPajama-627B", help="set path of slimpajama dataset")
     get_sp.add_argument("--prep-dataset", action="store_true", help="prepare/decompress dataset")
