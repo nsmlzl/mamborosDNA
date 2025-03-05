@@ -512,7 +512,7 @@ def nih_analysis(args):
                 print("before: rpts {} -> len {}; after: rpts {}; total len {}".format(nbr_rpt_before, strt_len + rpt_len * nbr_rpt_before, nbr_rpt_after, strt_len + pk_len + prpt_len + (nbr_rpt_before + nbr_rpt_after) * rpt_len))
 
                 #inpt_txt = inpt_txt_start + inpt_txt_rpt*nbr_rpt_before + inpt_txt_pk + inpt_txt_rpt*nbr_rpt_after + inpt_txt_prompt
-                inpt_txt = inpt_txt_start + inpt_txt_rpt*nbr_rpt_before + inpt_txt_pk + inpt_txt_rpt*nbr_rpt_after + inpt_txt_prompt
+                inpt_txt = inpt_txt_rpt*nbr_rpt_before + inpt_txt_start + inpt_txt_pk + inpt_txt_rpt*nbr_rpt_after + inpt_txt_prompt
                 # print(f"\nPROMPT:\n{inpt_txt}")
 
                 inpt_id = tokenizer(inpt_txt, return_tensors='pt')['input_ids'].cuda()
