@@ -268,6 +268,94 @@ class LitMamboros(L.LightningModule):
         return {'optimizer': optimizer, 'lr_scheduler': lr_scheduler, 'monitor': 'train_loss'}
 
 
+# short-context pre-train
+def sc_pretrain(args):
+    if args.check_ds_dl:
+        SlimPajamaDataModule.testbench(args)
+
+    torch.cuda.memory._record_memory_history(max_entries=500000)
+
+    # training
+    gpu_cnt = 6
+    max_epochs = 1000
+    limit_train_batches = 8 * 2 #25 #50 #* 20
+    limit_val_batches = 4 * 100
+
+    batch_size_train = 16
+    batch_size_val = 4
+
+    # optimizer
+    lr = 5e-5
+    lr_scheduler_factor = 0.85
+    weight_decay = 0.1
+
+
+    torch.set_float32_matmul_precision('medium')
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path + "/tokenizer.pth")
+
+    assert os.environ.get("HF_HOME") is not None, \
+             "HF_CACHE env variable not set; set to huggingface cache path"
+    length = 1024
+    pseudo_length = 1024
+    length_ratio = pseudo_length // length
+    assert limit_train_batches % length_ratio == 0, f"limit_train_batches ({limit_train_batches}) expected to be multiple of length_ratio ({length_ratio})"
+    assert limit_val_batches % length_ratio == 0, f"limit_val_batches ({limit_val_batches}) expected to be multiple of length_ratio ({length_ratio})"
+    sp_datamodule = SlimPajamaDataModule(args.slimpajama_identifier, tokenizer, pseudo_length, length, batch_size_train, batch_size_val, 42)
+
+    ssm_cfg = {'layer': 'Mamba2', 'max_hstate_trnsf_cnt': length_ratio-1}
+    mamba_config = MambaConfig(n_layer=24, d_model=768, vocab_size=50288,
+                               ssm_cfg=ssm_cfg, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
+                               pad_vocab_size_multiple=1)
+    print("mamba_config: {}".format(mamba_config))
+
+    pretrained_mamboros = MambaLMHeadModel(mamba_config)
+
+    l_mamboros = LitMamboros(pretrained_mamboros, tokenizer, lr, lr_scheduler_factor,
+                             weight_decay, batch_size_train, batch_size_val)
+
+
+    logger = TensorBoardLogger("tb_logs", name="mamboros_model")
+    ckpt_cb = L.pytorch.callbacks.ModelCheckpoint(save_top_k=10, monitor="train_loss", save_on_train_epoch_end=True,
+                                               verbose=True, every_n_epochs=10)
+
+    # policy = {Block, }
+    # strategy = FSDPStrategy(sharding_strategy="SHARD_GRAD_OP", activation_checkpointing_policy=policy, auto_wrap_policy=policy)
+    # strategy = FSDPStrategy(sharding_strategy="FULL_SHARD", activation_checkpointing_policy=policy, auto_wrap_policy=policy)
+
+    strategy = FSDPStrategy(timeout=datetime.timedelta(seconds=600))
+    trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
+                        limit_val_batches=limit_val_batches, check_val_every_n_epoch=5, #gradient_clip_val=0.5, gradient_clip_algorithm="norm",
+                        devices=gpu_cnt, accelerator="gpu",
+                        precision='bf16-mixed', log_every_n_steps=1, logger=logger, strategy=strategy,
+                        use_distributed_sampler=False, callbacks=[ckpt_cb])
+    try:
+        trainer.fit(l_mamboros, datamodule=sp_datamodule)
+    except KeyboardInterrupt:
+        print("caught KeyboardInterrupt")
+
+    torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+    torch.cuda.memory._record_memory_history(enabled=None)
+
+    # store model parameters
+    if args.state_dict_out is not None:
+        if trainer.is_global_zero:
+            print("storing the model parameters")
+        tmp_ckpt_file = 'tmp_ckpt'
+        trainer.save_checkpoint(tmp_ckpt_file)
+        if trainer.is_global_zero:
+            tmp_ckpt = torch.load(tmp_ckpt_file)
+            state_dict = tmp_ckpt['state_dict']
+            state_dict = {re.search(r'^[^.]*\.(.*)', key).group(1): value for key, value in state_dict.items()}
+            for (key, value) in state_dict.items():
+                assert type(key) is not torch.Tensor
+                assert type(value) is torch.Tensor
+                assert value.device == torch.device("cpu"), f"expected state_dict of pretrained model to be on cpu; instead is {value.device}"
+            torch.save({'mamba_state_dict': state_dict}, args.model_path + args.state_dict_out)
+            os.remove(tmp_ckpt_file)
+            print("done")
+
+
 def ftune(args):
     if args.check_ds_dl:
         SlimPajamaDataModule.testbench(args)
@@ -795,6 +883,13 @@ if __name__ == '__main__':
     get_sp.add_argument("--slimpajama-path", default="/scratch/niklas/SlimPajama-627B", help="set path of slimpajama dataset")
     get_sp.add_argument("--prep-dataset", action="store_true", help="prepare/decompress dataset")
     get_sp.set_defaults(func=get)
+
+    scpt_sp = subparsers.add_parser("sc-pretrain", help="short-context pre-train")
+    scpt_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
+    scpt_sp.add_argument("--state-dict-out", default=None, help="output state dict file name")
+    scpt_sp.add_argument("--slimpajama-identifier", default="SlimPajama-627B", help="path or cache identifier of SlimPajama-627B dataset")
+    scpt_sp.add_argument("--check-ds-dl", action="store_true", help="check mamboros dataset/dataloader")
+    scpt_sp.set_defaults(func=sc_pretrain)
 
     ftune_sp = subparsers.add_parser("finetune", help="finetune model")
     ftune_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
