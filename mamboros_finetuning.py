@@ -473,8 +473,8 @@ def nih_analysis(args):
 
     # inpt_txt = "Some unimportant information. The key is not '7'. The key is '4142'. The key not '41'. Some unimportant information.\nName the key." #What is the key?"
 
-    clengths = np.arange(1000, 20001, 2000) #np.arange(1000, 10001, 1000)
-    depths = [0.1, 0.5, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9][::-1]
+    clengths = np.arange(1000, 20001, 500) #np.arange(1000, 10001, 1000)
+    depths = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9][::-1]
     nbr_correct_retrievals = np.zeros((len(depths), len(clengths)))
 
     #nbr_correct_retrievals = 0
