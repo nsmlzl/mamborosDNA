@@ -455,6 +455,7 @@ def nih_analysis(args):
     # context_length = 1024
     # pseudo_context_length = 20 * context_length
     # context_length_ratio = pseudo_context_length // context_length
+
     torch.set_float32_matmul_precision('medium')
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_path + "/tokenizer.pth")
@@ -473,20 +474,33 @@ def nih_analysis(args):
 
     # inpt_txt = "Some unimportant information. The key is not '7'. The key is '4142'. The key not '41'. Some unimportant information.\nName the key." #What is the key?"
 
-    clengths = np.arange(1000, 20001, 500) #np.arange(1000, 10001, 1000)
-    depths = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9][::-1]
-    nbr_correct_retrievals = np.zeros((len(depths), len(clengths)))
+    clengths_start = 6000
+    clengths_end = 15001
+    step = 4000
+    clengths_y_offset = 500
+    clengths = np.arange(clengths_start, clengths_end, step) #np.arange(1000, 20001, 500) #np.arange(1000, 10001, 1000)
+    depths = [0.1, 0.5, 0.9] #[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9][::-1]
+    clengths_y = np.arange(clengths_y_offset, clengths_end - clengths_start + clengths_y_offset, step)
+    print(clengths)
+    print(clengths_y)
+
+    if args.depth_type == "depth-perc":
+        nbr_correct_retrievals = np.zeros((len(depths), len(clengths)))
+    else:
+        nbr_correct_retrievals = np.full((len(clengths), len(clengths)), np.nan)
 
     #nbr_correct_retrievals = 0
     pks = ['1236277', 'crazy-eagle-six', '424242', '230596', 'Bahnhofsvorplatz', 'GACTAT', 'limpiaparabrisas', 'jms854', 'deep river cruise', 'Jamal Musiala']
+    pks = pks[:3]
 
-    for clen_idx in range(len(clengths)):
-        for dep_idx in range(len(depths)):
-            clen = clengths[clen_idx]
-            dep = depths[dep_idx]
+    for x_idx in range(len(clengths)):
+        for y_idx in range(len(depths)) if args.depth_type == "depth-perc" else range(x_idx+1):
+
+            if math.isnan(nbr_correct_retrievals[y_idx][x_idx]):
+                nbr_correct_retrievals[y_idx][x_idx] = 0
 
             for pk in pks:
-                print("len tokenized passkey ('{}'): {}".format(pk, len(tokenizer(pk, return_tensors='pt')['input_ids'][0,:])))
+                #print("len tokenized passkey ('{}'): {}".format(pk, len(tokenizer(pk, return_tensors='pt')['input_ids'][0,:])))
 
                 # Needle-In-Haystack benchmark based on LongLora paper
                 inpt_txt_start = "There is an important info hidden inside a lof of irrelevant text. Find it and memorize them. I will quiz you about the important information there.\n"
@@ -505,18 +519,23 @@ def nih_analysis(args):
                 pk_len = len(tokenizer(inpt_txt_pk, return_tensors='pt')['input_ids'][0,:])
                 prpt_len = len(tokenizer(inpt_txt_prompt, return_tensors='pt')['input_ids'][0,:])
 
+                clen = clengths[x_idx]
+                if args.depth_type == "depth-perc":
+                    dep = int((1.0 - depths[y_idx]) * clen)
+                else:
+                    dep = clengths_y[:x_idx+1][::-1][y_idx]
                 print("clen: {}; dep: {}".format(clen, dep))
-                nbr_rpt_before = int(( clen * dep - strt_len ) // rpt_len) + 1
+                nbr_rpt_before = int(( dep - strt_len ) // rpt_len) + 1
                 nbr_rpt_after = int(( clen - strt_len - rpt_len * nbr_rpt_before - pk_len - prpt_len ) // rpt_len)+ 1
 
-                print("before: rpts {} -> len {}; after: rpts {}; total len {}".format(nbr_rpt_before, strt_len + rpt_len * nbr_rpt_before, nbr_rpt_after, strt_len + pk_len + prpt_len + (nbr_rpt_before + nbr_rpt_after) * rpt_len))
+                #print("before: rpts {} -> len {}; after: rpts {}; total len {}".format(nbr_rpt_before, strt_len + rpt_len * nbr_rpt_before, nbr_rpt_after, strt_len + pk_len + prpt_len + (nbr_rpt_before + nbr_rpt_after) * rpt_len))
 
                 #inpt_txt = inpt_txt_start + inpt_txt_rpt*nbr_rpt_before + inpt_txt_pk + inpt_txt_rpt*nbr_rpt_after + inpt_txt_prompt
                 inpt_txt = inpt_txt_rpt*nbr_rpt_before + inpt_txt_start + inpt_txt_pk + inpt_txt_rpt*nbr_rpt_after + inpt_txt_prompt
                 # print(f"\nPROMPT:\n{inpt_txt}")
 
                 inpt_id = tokenizer(inpt_txt, return_tensors='pt')['input_ids'].cuda()
-                print(f"Length: {inpt_id[0].size(0)}")
+                #print(f"Length: {inpt_id[0].size(0)}")
 
                 l_mamboros.eval()
                 with torch.no_grad():
@@ -545,12 +564,12 @@ def nih_analysis(args):
                 if match:
                     extracted_key = match.group(2)
                     if extracted_key == pk:
-                        nbr_correct_retrievals[dep_idx][clen_idx] += 1
-                        print("automatic pass key check passed: {}".format(pk))
-                    else:
-                        print("key located but wrong: expected key '{}'; output {}".format(pk, tokenizer.decode(inpt_id[0,-30:])))
-                else:
-                    print("unable to locate key: expected key '{}'; output {}".format(pk, tokenizer.decode(inpt_id[0,-30:])))
+                        nbr_correct_retrievals[y_idx][x_idx] += 1
+                        #print("automatic pass key check passed: {}".format(pk))
+                    #else:
+                        #print("key located but wrong: expected key '{}'; output {}".format(pk, tokenizer.decode(inpt_id[0,-30:])))
+                #else:
+                    #print("unable to locate key: expected key '{}'; output {}".format(pk, tokenizer.decode(inpt_id[0,-30:])))
 
                 # inpt_id = tokenizer(inpt_txt, return_tensors='pt')['input_ids'].cuda()
                 # model = AutoModelForCausalLM.from_pretrained("state-spaces/mamba-2.8b-hf").cuda()
@@ -564,8 +583,10 @@ def nih_analysis(args):
                 #     dec = tokenizer.decode(o)
                 #     dec_ascii = [ord(char) for char in dec]
                 #     print(f"{o}: {dec} {dec_ascii}")
-            print("Correct retrieval rate: {}%".format(nbr_correct_retrievals[dep_idx][clen_idx] / len(pks) * 100))
+            #print("Correct retrieval rate: {}%".format(nbr_correct_retrievals[y_idx][x_idx] / len(pks) * 100))
 
+    print(nbr_correct_retrievals)
+    nbr_correct_retrievals = nbr_correct_retrievals[::-1]
     nbr_correct_retrievals = nbr_correct_retrievals * 100. / len(pks)
     print(nbr_correct_retrievals)
 
@@ -574,13 +595,20 @@ def nih_analysis(args):
     cax = ax.imshow(nbr_correct_retrievals, cmap='RdYlGn', aspect='equal', vmin=0, vmax=100)
 
     ax.set_xticks(np.arange(len(clengths)))
-    ax.set_yticks(np.arange(len(depths)))
     ax.set_xticklabels(clengths)
-    ax.set_yticklabels([d * 100.0 for d in depths])
+    if args.depth_type == "depth-perc":
+        ax.set_yticks(np.arange(len(depths)))
+        ax.set_yticklabels([d * 100.0 for d in depths[::-1]])
+    else:
+        ax.set_yticks(np.arange(len(clengths)))
+        ax.set_yticklabels([l - clengths_y_offset for l in clengths[::-1]])
     plt.xticks(rotation=45)
 
-    ax.set_xlabel("Context length")
-    ax.set_ylabel("Key depth (%)")
+    ax.set_xlabel("Context length [#tokens]")
+    if args.depth_type == "depth-perc":
+        ax.set_ylabel("Key depth [%]")
+    else:
+        ax.set_ylabel("Key depth [#tokens]")
 
     ax.set_xticks(np.arange(len(clengths) + 1) - 0.5, minor=True)
     ax.set_yticks(np.arange(len(depths) + 1) - 0.5, minor=True)
@@ -902,6 +930,8 @@ if __name__ == '__main__':
     ftune_sp.set_defaults(func=ftune)
 
     nih_sp = subparsers.add_parser("compute-nih", help="compute needle-in-haystack analysis.")
+    nih_sp.add_argument('--depth-type', choices=['depth-perc', 'depth-token'], default='depth-token', \
+            help='specify depth type: percentage or token-count (default: depth-token)')
     nih_sp.add_argument("--model-path", default="model_store/", help="path to load/store model")
     # nih_sp.add_argument("--state-dict", default="/mamba_state_dict6.pth", help="input state dict file name")
     nih_sp.add_argument("--state-dict", default="/mamba_state_dict.pth", help="input state dict file name")
