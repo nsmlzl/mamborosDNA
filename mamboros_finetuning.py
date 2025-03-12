@@ -297,8 +297,8 @@ def sc_pretrain(args):
 
     assert os.environ.get("HF_HOME") is not None, \
              "HF_CACHE env variable not set; set to huggingface cache path"
-    length = 1024
-    pseudo_length = 1024
+    length = 2048
+    pseudo_length = 2048
     length_ratio = pseudo_length // length
     assert limit_train_batches % length_ratio == 0, f"limit_train_batches ({limit_train_batches}) expected to be multiple of length_ratio ({length_ratio})"
     assert limit_val_batches % length_ratio == 0, f"limit_val_batches ({limit_val_batches}) expected to be multiple of length_ratio ({length_ratio})"
