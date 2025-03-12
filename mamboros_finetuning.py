@@ -475,9 +475,9 @@ def nih_analysis(args):
 
     # inpt_txt = "Some unimportant information. The key is not '7'. The key is '4142'. The key not '41'. Some unimportant information.\nName the key." #What is the key?"
 
-    clengths_start = 6000
-    clengths_end = 15001
-    step = 4000
+    clengths_start = 1000
+    clengths_end = 20001
+    step = 500
     clengths_y_offset = 500
     clengths = np.arange(clengths_start, clengths_end, step) #np.arange(1000, 20001, 500) #np.arange(1000, 10001, 1000)
     depths = [0.1, 0.5, 0.9] #[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9] #[0.1, 0.3, 0.5, 0.7, 0.9][::-1]
@@ -492,7 +492,6 @@ def nih_analysis(args):
 
     #nbr_correct_retrievals = 0
     pks = ['1236277', 'crazy-eagle-six', '424242', '230596', 'Bahnhofsvorplatz', 'GACTAT', 'limpiaparabrisas', 'jms854', 'deep river cruise', 'Jamal Musiala']
-    pks = pks[:3]
 
     for x_idx in range(len(clengths)):
         for y_idx in range(len(depths)) if args.depth_type == "depth-perc" else range(x_idx+1):
@@ -612,7 +611,10 @@ def nih_analysis(args):
         ax.set_ylabel("Key depth [#tokens]")
 
     ax.set_xticks(np.arange(len(clengths) + 1) - 0.5, minor=True)
-    ax.set_yticks(np.arange(len(depths) + 1) - 0.5, minor=True)
+    if args.depth_type == "depth-perc":
+        ax.set_yticks(np.arange(len(depths) + 1) - 0.5, minor=True)
+    else:
+        ax.set_yticks(np.arange(len(clengths_y) + 1) - 0.5, minor=True)
     ax.grid(which="minor", color="black", linestyle='-', linewidth=0.5)
 
     divider = make_axes_locatable(ax)
