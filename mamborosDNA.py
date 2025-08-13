@@ -356,10 +356,10 @@ class GenomeIterator:
 class GenomeDataset(torch.utils.data.IterableDataset):
     hg38_url = 'https://api.ncbi.nlm.nih.gov/datasets/v2alpha/genome/accession/GCF_000001405.40/download'
     t2t_url = 'https://api.ncbi.nlm.nih.gov/datasets/v2alpha/genome/accession/GCF_009914755.1/download'
-    yeast_url = 'http://hypervolu.me/~erik/yeast/cerevisiae.pan.fa.gz'
+    yeast_url = 'http://hypervolu.me/~erik/yeast/cerevisiae.fa.gz'
 
     T2T_path = "dataset/ncbi_dataset/data/GCF_009914755.1/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna"
-    yeast_path = "dataset/cerevisiae.pan.fa"
+    yeast_path = "dataset/cerevisiae.fa"
     mhc_path = "dataset/mhc.fasta"
     numpy_path = "dataset/numpy/"
 
