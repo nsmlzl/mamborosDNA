@@ -513,7 +513,7 @@ class GenomeDataset(torch.utils.data.IterableDataset):
             print("Download with the following commands:")
             print("$ mkdir dataset; cd dataset")
             print("$ curl -O {}".format(GenomeDataset.yeast_url))
-            print("$ gzip -d cerevisiae.pan.fa.gz")
+            print("$ gzip -d cerevisiae.fa.gz")
             print("Afterwards rerun initialization subcommand.")
             return
 
@@ -551,13 +551,14 @@ class LitMamba(L.LightningModule):
         return self.mamboros(inpts).logits
 
     def predict_step(self, batch, batch_idx):
-        match batch:
-            case (inpt, trgt):
-                preds = self(inpt)
-                cross_entropy = torch.nn.functional.cross_entropy(preds.view(-1, preds.size(-1)), trgt.view(-1), reduction='none')
-                return cross_entropy.view(trgt.shape)
-            case inpt:
-                return self(inpt)
+        return self(batch)
+        #match batch:
+            #case (inpt, trgt):
+                #preds = self(inpt)
+                #cross_entropy = torch.nn.functional.cross_entropy(preds.view(-1, preds.size(-1)), trgt.view(-1), reduction='none')
+                #return cross_entropy.view(trgt.shape)
+            #case inpt:
+                #return self(inpt)
 
     def training_step(self, batch, batch_idx):
         inpts, trgts = batch
