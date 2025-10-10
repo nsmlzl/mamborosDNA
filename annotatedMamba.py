@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import lightning as L
-from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.loggers import WandbLogger
 
 import numpy as np
 
@@ -588,7 +588,7 @@ class LitMamba(L.LightningModule):
         inpts, trgts = batch
         outpts = self(inpts)
         loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
-        self.log("train_loss", loss.item(), sync_dist=True)
+        self.log("train_loss", loss.item())
         return loss
 
     # def on_train_batch_start(self, batch, batch_idx):
@@ -612,7 +612,6 @@ def train():
     # Mamba2 compatible model (d_model needs to be multiples of 512)
     n_layer = 10
     d_model = 512
-
 
     # training
     gpu_cnt = 1
@@ -644,7 +643,12 @@ def train():
     l_mamba = LitMamba(mamba, tokenizer, lr, lr_scheduler_factor,
                              weight_decay, batch_size_train, batch_size_val)
 
-    logger = TensorBoardLogger("tb_logs", name="mamboros_model")
+    logger = WandbLogger(project="mamboros")
+    logger.experiment.config["context_length"] = context_length
+    logger.experiment.config["n_layer"] = n_layer
+    logger.experiment.config["d_model"] = d_model
+    print("WandB training run: '{}' ({})".format(logger.experiment.name, logger.experiment.url))
+
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5,
                         devices=[0], accelerator="gpu",
@@ -652,7 +656,6 @@ def train():
 
 
     trainer.fit(l_mamba, datamodule=train_dm)
-
 
 
 if __name__ == '__main__':
