@@ -6,3 +6,4 @@ models
 lightning_logs
 tb_logs
 wandb
+mamboros

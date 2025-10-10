@@ -12,6 +12,9 @@ from torch.utils.data import DataLoader
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger
 
+from torchmetrics.classification import MulticlassAccuracy
+from torchmetrics.text import Perplexity
+
 import numpy as np
 
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
@@ -539,19 +542,27 @@ class GenomeDataset(torch.utils.data.IterableDataset):
 
 # TODO create Lightning Datamodule
 class GenomeDataModule(L.LightningDataModule):
-    def __init__(self, tokenizer, length, batch_size_train):
+    def __init__(self, tokenizer, length, batch_size_train, batch_size_val):
         super().__init__()
         self.tokenizer = tokenizer
         self.length = length
         self.batch_size_train = batch_size_train
+        self.batch_size_val = batch_size_val
 
     def prepare_data(self):
         train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries_yeast, 0)
         self.train_ds = GenomeDataset(train_iter)
         self.train_ds.config(self.tokenizer, self.length)
 
+        val_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.validation_entries_yeast, 0)
+        self.val_ds = GenomeDataset(val_iter)
+        self.val_ds.config(self.tokenizer, self.length)
+
     def train_dataloader(self):
         return DataLoader(self.train_ds, self.batch_size_train)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_ds, self.batch_size_val)
 
 
 class LitMamba(L.LightningModule):
@@ -571,6 +582,12 @@ class LitMamba(L.LightningModule):
 
         # self.save_hyperparameters(ignore=['mamborosDNA'])
 
+        self.train_accuracy = MulticlassAccuracy(num_classes=self.tokenizer.vocab_size, average='micro')
+        self.val_accuracy = MulticlassAccuracy(num_classes=self.tokenizer.vocab_size, average='micro')
+
+        self.train_perplexity = Perplexity()
+        self.val_perplexity = Perplexity()
+
     def forward(self, inpts):
         return self.mamboros(inpts).logits
 
@@ -589,7 +606,31 @@ class LitMamba(L.LightningModule):
         outpts = self(inpts)
         loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
         self.log("train_loss", loss.item())
+
+        self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        self.train_perplexity(outpts, trgts)
         return loss
+
+    def on_train_epoch_end(self):
+        # log and reset at end of step
+        self.log("train_accuracy", self.train_accuracy.compute()*100.0, prog_bar=True)
+        self.train_accuracy.reset()
+        self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
+        self.train_perplexity.reset()
+
+    def validation_step(self, batch, batch_idx):
+        inpts, trgts = batch
+        outpts = self(inpts)
+
+        self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        self.val_perplexity(outpts, trgts)
+
+    def on_validation_epoch_end(self):
+        # log and reset at end of step
+        self.log("val_accuracy", self.val_accuracy.compute()*100.0)
+        self.val_accuracy.reset()
+        self.log("val_perplexity", self.val_perplexity.compute())
+        self.val_perplexity.reset()
 
     # def on_train_batch_start(self, batch, batch_idx):
     #     raise NotImplementedError()
@@ -615,12 +656,12 @@ def train():
 
     # training
     gpu_cnt = 1
-    max_epochs = 4
-    limit_train_batches = 40
+    max_epochs = 10
+    limit_train_batches = 16
     limit_val_batches = 4
 
-    batch_size_train = 1
-    batch_size_val = 1
+    batch_size_train = 64
+    batch_size_val = 64
 
     context_length = 1024
 
@@ -634,7 +675,7 @@ def train():
     # TODO reduce bitwidth of tokenizer
     tokenizer = DNATokenizer()
 
-    train_dm = GenomeDataModule(tokenizer, context_length, batch_size_train)
+    yeast_dm = GenomeDataModule(tokenizer, context_length, batch_size_train, batch_size_val)
 
     mamba_config = MambaConfig(n_layer=n_layer, d_model=d_model, vocab_size=tokenizer.vocab_size,
                                ssm_cfg={'layer': 'Mamba2'}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
@@ -654,8 +695,7 @@ def train():
                         devices=[0], accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger)
 
-
-    trainer.fit(l_mamba, datamodule=train_dm)
+    trainer.fit(l_mamba, datamodule=yeast_dm)
 
 
 if __name__ == '__main__':
