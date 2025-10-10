@@ -1,11 +1,18 @@
+import os
+import argparse
+import random
+
 from pathlib import Path
 
-import torch
-import lightning as L
-
-import os
-import numpy as np
 from pyfaidx import Fasta
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+import lightning as L
+from lightning.pytorch.loggers import TensorBoardLogger
+
+import numpy as np
 
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
 from mamba_ssm.models.config_mamba import MambaConfig
@@ -160,7 +167,7 @@ class GenomeIterator:
         self.n_token_id = self.tokenizer.added_tokens_encoder['N']
 
     def reseed(self):
-        world_size = torch.distributed.get_world_size()
+        world_size = 1 #torch.distributed.get_world_size()
         if world_size < 1:
             world_size = 1
         self.rnd_seed = self.rnd_seed + world_size
@@ -530,11 +537,28 @@ class GenomeDataset(torch.utils.data.IterableDataset):
         GenomeDataset.create_np_data(GenomeDataset.mhc_path, GenomeDataset.numpy_path)
 
 
+# TODO create Lightning Datamodule
+class GenomeDataModule(L.LightningDataModule):
+    def __init__(self, tokenizer, length, batch_size_train):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.length = length
+        self.batch_size_train = batch_size_train
+
+    def prepare_data(self):
+        train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries_yeast, 0)
+        self.train_ds = GenomeDataset(train_iter)
+        self.train_ds.config(self.tokenizer, self.length)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_ds, self.batch_size_train)
+
+
 class LitMamba(L.LightningModule):
-    def __init__(self, pretrained_mamba, tokenizer, lr, lr_scheduler_factor, weight_decay,
+    def __init__(self, initial_mamba, tokenizer, lr, lr_scheduler_factor, weight_decay,
                  batch_size_train, batch_size_val):
         super().__init__()
-        self.mamboros = pretrained_mamba
+        self.mamboros = initial_mamba
 
         self.tokenizer = tokenizer
         self.loss_fn = nn.CrossEntropyLoss()
@@ -580,21 +604,20 @@ class LitMamba(L.LightningModule):
         optimizer = torch.optim.AdamW(self.mamboros.parameters(), lr=self.lr, betas=(0.9, 0.95),
                                       weight_decay=self.weight_decay) #eps=epsilon,
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=150,
-                                                                  factor=self.lr_scheduler_factor, verbose=True)
+                                                                  factor=self.lr_scheduler_factor)
         return {'optimizer': optimizer, 'lr_scheduler': lr_scheduler, 'monitor': 'train_loss'}
 
 
 def train():
     # Mamba2 compatible model (d_model needs to be multiples of 512)
-    #n_layer = 20
-    n_layer = 5
+    n_layer = 10
     d_model = 512
 
 
     # training
     gpu_cnt = 1
-    max_epochs = 2
-    limit_train_batches = 4
+    max_epochs = 4
+    limit_train_batches = 40
     limit_val_batches = 4
 
     batch_size_train = 1
@@ -609,12 +632,12 @@ def train():
 
     torch.set_float32_matmul_precision('medium')
 
+    # TODO reduce bitwidth of tokenizer
     tokenizer = DNATokenizer()
 
-    # TODO dataset
+    train_dm = GenomeDataModule(tokenizer, context_length, batch_size_train)
 
-
-    mamba_config = MambaConfig(n_layer=n_layer, d_model=hf_config['d_model'], vocab_size=tokenizer.vocab_size,
+    mamba_config = MambaConfig(n_layer=n_layer, d_model=d_model, vocab_size=tokenizer.vocab_size,
                                ssm_cfg={'layer': 'Mamba2'}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
                                pad_vocab_size_multiple=1)
     mamba = MambaLMHeadModel(mamba_config)
@@ -624,11 +647,24 @@ def train():
     logger = TensorBoardLogger("tb_logs", name="mamboros_model")
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5,
-                        devices=gpu_cnt, accelerator="gpu",
+                        devices=[0], accelerator="gpu",
                         precision='bf16-mixed', log_every_n_steps=1, logger=logger)
 
 
-    trainer.fit(l_mamba, datamodule=sp_datamodule)
+    trainer.fit(l_mamba, datamodule=train_dm)
 
-#train()
-GenomeDataset.get_yeast_data()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(prog="mamboros")
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
+
+    get_sp = subparsers.add_parser("get-training-data", help="get yeast training data")
+    get_sp.set_defaults(func=GenomeDataset.get_yeast_data)
+
+    train_sp = subparsers.add_parser("train", help="train model")
+    train_sp.set_defaults(func=train)
+
+    args = parser.parse_args()
+    args.func()
+
