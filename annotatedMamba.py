@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.callbacks import LearningRateMonitor
 
 from torchmetrics.classification import MulticlassAccuracy
 from torchmetrics.text import Perplexity
@@ -651,14 +652,14 @@ class LitMamba(L.LightningModule):
 
 def train():
     # Mamba2 compatible model (d_model needs to be multiples of 512)
-    n_layer = 10
+    n_layer = 11
     d_model = 512
 
     # training
     gpu_cnt = 1
-    max_epochs = 10
+    max_epochs = 7500;
     limit_train_batches = 16
-    limit_val_batches = 4
+    limit_val_batches = 32
 
     batch_size_train = 64
     batch_size_val = 64
@@ -666,7 +667,8 @@ def train():
     context_length = 1024
 
     # optimizer
-    lr = 5e-5
+    # TODO log lr & learning rate scheduler
+    lr = 5e-4
     lr_scheduler_factor = 0.85
     weight_decay = 0.1
 
@@ -688,12 +690,17 @@ def train():
     logger.experiment.config["context_length"] = context_length
     logger.experiment.config["n_layer"] = n_layer
     logger.experiment.config["d_model"] = d_model
+    logger.experiment.config["batch_size_train"] = batch_size_train
+    logger.experiment.config["lr"] = lr
+    logger.experiment.config["lr_scheduler_factor"] = lr_scheduler_factor
+    logger.experiment.config["weight_decay"] = weight_decay
     print("WandB training run: '{}' ({})".format(logger.experiment.name, logger.experiment.url))
 
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
                         limit_val_batches=limit_val_batches, check_val_every_n_epoch=5,
                         devices=[0], accelerator="gpu",
-                        precision='bf16-mixed', log_every_n_steps=1, logger=logger)
+                        precision='bf16-mixed', log_every_n_steps=1, logger=logger,
+                        callbacks=[LearningRateMonitor(logging_interval='step')])
 
     trainer.fit(l_mamba, datamodule=yeast_dm)
 
