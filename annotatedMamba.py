@@ -517,7 +517,7 @@ class GenomeDataset(torch.utils.data.IterableDataset):
         GenomeDataset.create_np_data(GenomeDataset.T2T_path, GenomeDataset.numpy_path)
 
     # manually download Erik's yeast dataset and then convert into numpy arrays
-    def get_yeast_data():
+    def get_yeast_data(args):
         if not Path(GenomeDataset.yeast_path).exists():
             # For now, print instructions for manually downloading the dataset
             print("File not found: {}".format(GenomeDataset.yeast_path))
@@ -650,7 +650,7 @@ class LitMamba(L.LightningModule):
         return {'optimizer': optimizer, 'lr_scheduler': lr_scheduler, 'monitor': 'train_loss'}
 
 
-def train():
+def train(args):
     # Mamba2 compatible model (d_model needs to be multiples of 512)
     n_layer = 11
     d_model = 512
@@ -694,6 +694,8 @@ def train():
     logger.experiment.config["lr"] = lr
     logger.experiment.config["lr_scheduler_factor"] = lr_scheduler_factor
     logger.experiment.config["weight_decay"] = weight_decay
+    if args.debug:
+        logger.experiment.tags = ["debugging"]
     print("WandB training run: '{}' ({})".format(logger.experiment.name, logger.experiment.url))
 
     trainer = L.Trainer(max_epochs=max_epochs, limit_train_batches=limit_train_batches,
@@ -713,8 +715,9 @@ if __name__ == '__main__':
     get_sp.set_defaults(func=GenomeDataset.get_yeast_data)
 
     train_sp = subparsers.add_parser("train", help="train model")
+    train_sp.add_argument("--debug", action="store_true", help="tag this training run in logging with debugging tag")
     train_sp.set_defaults(func=train)
 
     args = parser.parse_args()
-    args.func()
+    args.func(args)
 
