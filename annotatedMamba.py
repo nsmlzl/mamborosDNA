@@ -54,7 +54,7 @@ class DNATokenizer(PreTrainedTokenizer):
         mask_token = AddedToken("[MASK]", lstrip=True, rstrip=False)
 
         # added swap token to have extra space when performing complement operation
-        characters = ['A', 'C', 'G', 'T', 'N', '[SWAP]']
+        characters = ['A', 'C', 'G', 'T', 'N', '[SWAP]', '[UTURN]']
 
         super().__init__(
             bos_token=bos_token,
@@ -102,6 +102,7 @@ class DNATokenizer(PreTrainedTokenizer):
         assert tokenizer_encode_dict["T"] == 9, "unexpected id for \"T\" token"
         assert tokenizer_encode_dict["N"] == 10, "unexpected id for \"N\" token"
         assert tokenizer_encode_dict["[SWAP]"] == 11, "unexpected id for \"[SWAP]\" token"
+        assert tokenizer_encode_dict["[UTURN]"] == 12, "unexpected id for \"[UTURN]\" token"
 
         print("Successfull validation of DNATokenizer!")
 
@@ -165,10 +166,11 @@ class GenomeIterator:
         self.tokenizer = None
         self.seq_len = None
 
-    def config(self, tokenizer, seq_len):
+    def config(self, tokenizer, seq_len, bidirectional=False):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         self.n_token_id = self.tokenizer.added_tokens_encoder['N']
+        self.bidirectional = bidirectional
 
     def reseed(self):
         world_size = 1 #torch.distributed.get_world_size()
@@ -187,7 +189,21 @@ class GenomeIterator:
         max_samplings = 9
         for i in range(max_samplings + 1):
             rnd_idx = self.rnd_gen.randint(0, self.len - 1)
-            inpt, targt = self.get_seq(rnd_idx)
+            seq = self.get_seq(rnd_idx)
+            if self.bidirectional:
+                rev_seq = torch.flip(seq, dims=[0])
+                uturn_seq = torch.tensor([self.tokenizer.added_tokens_encoder["[UTURN]"]])
+                seq = torch.cat([rev_seq, uturn_seq, seq], dim=0)
+            inpt = seq[:-1]
+            targt = seq[1:]
+            if not self.bidirectional:
+                assert inpt.numel() == self.seq_len, "expected a inpt tensor with {} elements; got {}".format(self.seq_len, inpt.numel())
+                assert targt.numel() == self.seq_len, "expected a targt tensor with {} elements; got {}".format(self.seq_len, targt.numel())
+            else:
+                bidirectional_len = self.seq_len*2+2
+                assert inpt.numel() == bidirectional_len, "expected a bidirectional inpt tensor with {} elements; got {}".format(bidirectional_len, inpt.numel())
+                assert targt.numel() == bidirectional_len, "expected a bidirectional targt tensor with {} elements; got {}".format(bidirectional_len, targt.numel())
+
             n_count = torch.sum(targt == self.n_token_id).item()
             if n_count <= self.max_n_count:
                 break
@@ -197,6 +213,7 @@ class GenomeIterator:
         n_count = torch.sum(targt == self.n_token_id).item()
         if n_count > 0:
             print("WARNING: Training input contains {} Ns".format(n_count))
+
         return inpt, targt
 
     def get_seq(self, idx):
@@ -246,13 +263,7 @@ class GenomeIterator:
 
         assert tokens.size <= self.seq_len + 1
 
-        # TODO use CharTensor instead of LongTensor
-        inpt = torch.from_numpy(tokens).to(torch.long)[:-1].clone()
-        targt = torch.from_numpy(tokens).to(torch.long)[1:].clone()
-        assert inpt.numel() == self.seq_len, "expected a inpt tensor with {} elements; got {}".format(self.seq_len, inpt.numel())
-        assert targt.numel() == self.seq_len, "expected a targt tensor with {} elements; got {}".format(self.seq_len, targt.numel())
-
-        return inpt, targt
+        return torch.from_numpy(tokens).to(torch.long)[:].clone()
 
 
     # validate T2T dataset; check if correct tokens are returned for predefined indices
@@ -304,6 +315,7 @@ class GenomeIterator:
         print(T2T_train_iter.entry_ranges)
 
         def check(idx, expct_inpt, expct_trgt):
+            # TODO update test for get_seq
             inpt, trgt = T2T_train_iter.get_seq(idx)
             actual_trgt = tokenizer.convert_tokens_to_string(tokenizer.convert_ids_to_tokens(trgt))
             actual_inpt = tokenizer.convert_tokens_to_string(tokenizer.convert_ids_to_tokens(inpt))
@@ -468,8 +480,8 @@ class GenomeDataset(torch.utils.data.IterableDataset):
         super().__init__()
         self.genomeIterator = genomeIterator
 
-    def config(self, tokenizer, seq_len):
-        self.genomeIterator.config(tokenizer, seq_len)
+    def config(self, tokenizer, seq_len, bidirectional):
+        self.genomeIterator.config(tokenizer, seq_len, bidirectional)
 
     def __iter__(self):
         self.genomeIterator.reseed()
@@ -543,21 +555,22 @@ class GenomeDataset(torch.utils.data.IterableDataset):
 
 # TODO create Lightning Datamodule
 class GenomeDataModule(L.LightningDataModule):
-    def __init__(self, tokenizer, length, batch_size_train, batch_size_val):
+    def __init__(self, tokenizer, length, batch_size_train, batch_size_val, bidirectional):
         super().__init__()
         self.tokenizer = tokenizer
         self.length = length
         self.batch_size_train = batch_size_train
         self.batch_size_val = batch_size_val
+        self.bidirectional = bidirectional
 
     def prepare_data(self):
         train_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.training_entries_yeast, 0)
         self.train_ds = GenomeDataset(train_iter)
-        self.train_ds.config(self.tokenizer, self.length)
+        self.train_ds.config(self.tokenizer, self.length, self.bidirectional)
 
         val_iter = GenomeIterator(GenomeDataset.numpy_path, GenomeDataset.validation_entries_yeast, 0)
         self.val_ds = GenomeDataset(val_iter)
-        self.val_ds.config(self.tokenizer, self.length)
+        self.val_ds.config(self.tokenizer, self.length, self.bidirectional)
 
     def train_dataloader(self):
         return DataLoader(self.train_ds, self.batch_size_train)
@@ -568,7 +581,7 @@ class GenomeDataModule(L.LightningDataModule):
 
 class LitMamba(L.LightningModule):
     def __init__(self, initial_mamba, tokenizer, lr, lr_scheduler_factor, weight_decay,
-                 batch_size_train, batch_size_val):
+                 batch_size_train, batch_size_val, bidirectional_training):
         super().__init__()
         self.mamboros = initial_mamba
 
@@ -580,6 +593,8 @@ class LitMamba(L.LightningModule):
         self.weight_decay = weight_decay
         self.batch_size_train = batch_size_train
         self.batch_size_val = batch_size_val
+
+        self.bidirectional_training = bidirectional_training
 
         # self.save_hyperparameters(ignore=['mamborosDNA'])
 
@@ -608,7 +623,15 @@ class LitMamba(L.LightningModule):
         loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
         self.log("train_loss", loss.item())
 
-        self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        if self.bidirectional_training:
+            forward_len = (outpts.shape[1] - 2) // 2
+            outpts_tmp = outpts[:,-1*forward_len:]
+            trgts_tmp = trgts[:,-1*forward_len:]
+            self.train_accuracy(outpts_tmp.reshape(-1, outpts_tmp.size(-1)), trgts_tmp.reshape(-1))
+        else:
+            self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+
+        # TODO fix perplexity for bidirectional training
         self.train_perplexity(outpts, trgts)
         return loss
 
@@ -623,7 +646,15 @@ class LitMamba(L.LightningModule):
         inpts, trgts = batch
         outpts = self(inpts)
 
-        self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        if self.bidirectional_training:
+            forward_len = (outpts.shape[1] - 2) // 2
+            outpts_tmp = outpts[:,-1*forward_len:]
+            trgts_tmp = trgts[:,-1*forward_len:]
+            self.val_accuracy(outpts_tmp.reshape(-1, outpts_tmp.size(-1)), trgts_tmp.reshape(-1))
+        else:
+            self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+
+        # TODO fix perplexity for bidirectional training
         self.val_perplexity(outpts, trgts)
 
     def on_validation_epoch_end(self):
@@ -665,6 +696,7 @@ def train(args):
     batch_size_val = 64
 
     context_length = 1024
+    bidirectional = False
 
     # optimizer
     # TODO log lr & learning rate scheduler
@@ -677,17 +709,18 @@ def train(args):
     # TODO reduce bitwidth of tokenizer
     tokenizer = DNATokenizer()
 
-    yeast_dm = GenomeDataModule(tokenizer, context_length, batch_size_train, batch_size_val)
+    yeast_dm = GenomeDataModule(tokenizer, context_length, batch_size_train, batch_size_val, bidirectional)
 
     mamba_config = MambaConfig(n_layer=n_layer, d_model=d_model, vocab_size=tokenizer.vocab_size,
                                ssm_cfg={'layer': 'Mamba2'}, rms_norm=True, residual_in_fp32=True, fused_add_norm=True,
                                pad_vocab_size_multiple=1)
     mamba = MambaLMHeadModel(mamba_config)
     l_mamba = LitMamba(mamba, tokenizer, lr, lr_scheduler_factor,
-                             weight_decay, batch_size_train, batch_size_val)
+                             weight_decay, batch_size_train, batch_size_val, bidirectional)
 
     logger = WandbLogger(project="mamboros")
     logger.experiment.config["context_length"] = context_length
+    logger.experiment.config["bidirectional"] = bidirectional
     logger.experiment.config["n_layer"] = n_layer
     logger.experiment.config["d_model"] = d_model
     logger.experiment.config["batch_size_train"] = batch_size_train
