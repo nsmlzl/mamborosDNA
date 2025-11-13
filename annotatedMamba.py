@@ -41,6 +41,7 @@ from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
 # T      : 9
 # N      : 10
 # [SWAP] : 11 (extra token space used for swap operation in complement operation)
+# [UTURN]: 12
 class DNATokenizer(PreTrainedTokenizer):
     def __init__(self, model_max_length=1073741824, **kwargs):
         # default model_max_length of 1Gbp
@@ -184,37 +185,89 @@ class GenomeIterator:
         assert self.tokenizer != None, "Tokenizer need to be set; run config() before usage"
         assert self.seq_len != None, "Sequence length need to be set; run config before usage"
 
-        inpt = targt = None
+        inpt = trgt = None
         # prevent infinite loops with for loop
         max_samplings = 9
         for i in range(max_samplings + 1):
             rnd_idx = self.rnd_gen.randint(0, self.len - 1)
             seq = self.get_seq(rnd_idx)
-            if self.bidirectional:
-                rev_seq = torch.flip(seq, dims=[0])
-                uturn_seq = torch.tensor([self.tokenizer.added_tokens_encoder["[UTURN]"]])
-                seq = torch.cat([rev_seq, uturn_seq, seq], dim=0)
-            inpt = seq[:-1]
-            targt = seq[1:]
+
+            n_count = torch.sum(seq == self.n_token_id).item()
+            if n_count > self.max_n_count:
+                continue
+
             if not self.bidirectional:
+                inpt = seq[:-1]
+                trgt = seq[1:]
                 assert inpt.numel() == self.seq_len, "expected a inpt tensor with {} elements; got {}".format(self.seq_len, inpt.numel())
-                assert targt.numel() == self.seq_len, "expected a targt tensor with {} elements; got {}".format(self.seq_len, targt.numel())
+                assert trgt.numel() == self.seq_len, "expected a trgt tensor with {} elements; got {}".format(self.seq_len, trgt.numel())
+
+                # mask 15% of trgts to have comparable metric
+                num_mask = int(0.15 * self.seq_len)
+                mask_indices = torch.randperm(self.seq_len)[:num_mask]
+                mask = torch.zeros(self.seq_len, dtype=torch.bool)
+                mask[mask_indices] = True
+                trgt_bidirectional = trgt.clone()
+                trgt_bidirectional[~mask] = -100
+
             else:
-                bidirectional_len = self.seq_len*2+2
+                seq = seq[:-1]
+                seq_orig = seq
+                seq_len = seq.shape[0]
+                num_mask = int(0.15 * seq_len)
+                num_mask_mask = int(0.15 * 0.8 * seq_len)
+                num_mask_unchanged = int(0.15 * 0.1 * seq_len)
+                num_mask_randomized = num_mask - num_mask_mask - num_mask_unchanged
+
+                # all tokens which get selected for masking
+                mask_indices = torch.randperm(seq_len)[:num_mask]
+                mask = torch.zeros(seq_len, dtype=torch.bool)
+                mask[mask_indices] = True
+
+                # masked tokens which actually get replaced with mask token
+                mask_mask_indices_indices = torch.randperm(mask_indices.shape[0])[:num_mask_mask]
+                mask_mask_indices = mask_indices[mask_mask_indices_indices]
+
+                # all tokens chosen to be replaced with some random token
+                mask_unmasked_indices = mask_indices[~torch.isin(mask_indices, mask_mask_indices)]
+                mask_randomized_indices_indices = torch.randperm(mask_unmasked_indices.shape[0])[:num_mask_randomized]
+                mask_randomized_indices = mask_unmasked_indices[mask_randomized_indices_indices]
+                seq_unrandomized = seq[mask_randomized_indices].clone()
+                token_candidates = torch.tensor([self.tokenizer.added_tokens_encoder[x] for x in ['A', 'C', 'G', 'T']])
+                random_indices = torch.randint(0, token_candidates.shape[0], size=(1, seq_unrandomized.shape[0]))[0]
+                seq_randomized = token_candidates[random_indices]
+                # change all randomly generated tokens which match their original token
+                same_random_token_mask = (seq_randomized == seq_unrandomized)
+                seq_randomized[same_random_token_mask] = seq_randomized[same_random_token_mask] + 1
+                seq_randomized[seq_randomized > token_candidates.max().item()] = token_candidates.min()
+                assert not torch.any(seq_randomized == seq_unrandomized), "A randomized masked element matches its original value"
+
+                # create inpt tensor
+                masked_seq = seq.clone()
+                masked_seq[mask_mask_indices] = self.tokenizer.added_tokens_encoder["[MASK]"]
+                masked_seq[mask_randomized_indices] = seq_randomized
+                rev_masked_seq = torch.flip(masked_seq, dims=[0])
+                uturn_char = torch.tensor([self.tokenizer.added_tokens_encoder["[UTURN]"]])
+                inpt = torch.cat([rev_masked_seq, uturn_char, masked_seq]).clone()
+
+                # create trgt tensor
+                trgt_front = torch.full((seq.shape[0]+1,), -100)
+                trgt_back = seq.clone()
+                trgt_back[~mask] = -100
+                trgt = torch.cat([trgt_front, trgt_back]).clone()
+                trgt_bidirectional = trgt
+
+                bidirectional_len = self.seq_len*2+1
                 assert inpt.numel() == bidirectional_len, "expected a bidirectional inpt tensor with {} elements; got {}".format(bidirectional_len, inpt.numel())
-                assert targt.numel() == bidirectional_len, "expected a bidirectional targt tensor with {} elements; got {}".format(bidirectional_len, targt.numel())
+                assert trgt.numel() == bidirectional_len, "expected a bidirectional trgt tensor with {} elements; got {}".format(bidirectional_len, trgt.numel())
 
-            n_count = torch.sum(targt == self.n_token_id).item()
-            if n_count <= self.max_n_count:
-                break
-            #else:
-                #print("too many Ns")
+            break
 
-        n_count = torch.sum(targt == self.n_token_id).item()
+        n_count = torch.sum(trgt == self.n_token_id).item()
         if n_count > 0:
             print("WARNING: Training input contains {} Ns".format(n_count))
 
-        return inpt, targt
+        return inpt, trgt, trgt_bidirectional
 
     def get_seq(self, idx):
         assert idx >= 0
@@ -586,7 +639,7 @@ class LitMamba(L.LightningModule):
         self.mamboros = initial_mamba
 
         self.tokenizer = tokenizer
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
 
         self.lr = lr
         self.lr_scheduler_factor = lr_scheduler_factor
@@ -598,11 +651,13 @@ class LitMamba(L.LightningModule):
 
         # self.save_hyperparameters(ignore=['mamborosDNA'])
 
-        self.train_accuracy = MulticlassAccuracy(num_classes=self.tokenizer.vocab_size, average='micro')
-        self.val_accuracy = MulticlassAccuracy(num_classes=self.tokenizer.vocab_size, average='micro')
+        self.train_accuracy = MulticlassAccuracy(num_classes=self.tokenizer.vocab_size, average='micro', ignore_index=-100)
+        self.train_accuracy_bidirectional = MulticlassAccuracy(num_classes=self.tokenizer.vocab_size, average='micro', ignore_index=-100)
+        self.val_accuracy = MulticlassAccuracy(num_classes=self.tokenizer.vocab_size, average='micro', ignore_index=-100)
+        self.val_accuracy_bidirectional = MulticlassAccuracy(num_classes=self.tokenizer.vocab_size, average='micro', ignore_index=-100)
 
-        self.train_perplexity = Perplexity()
-        self.val_perplexity = Perplexity()
+        self.train_perplexity = Perplexity(ignore_index=-100)
+        self.val_perplexity = Perplexity(ignore_index=-100)
 
     def forward(self, inpts):
         return self.mamboros(inpts).logits
@@ -618,18 +673,14 @@ class LitMamba(L.LightningModule):
                 #return self(inpt)
 
     def training_step(self, batch, batch_idx):
-        inpts, trgts = batch
+        inpts, trgts, trgts_bidi = batch
         outpts = self(inpts)
         loss = self.loss_fn(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
         self.log("train_loss", loss.item())
+        assert trgts[trgts == 5].numel() == 0
 
-        if self.bidirectional_training:
-            forward_len = (outpts.shape[1] - 2) // 2
-            outpts_tmp = outpts[:,-1*forward_len:]
-            trgts_tmp = trgts[:,-1*forward_len:]
-            self.train_accuracy(outpts_tmp.reshape(-1, outpts_tmp.size(-1)), trgts_tmp.reshape(-1))
-        else:
-            self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        self.train_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        self.train_accuracy_bidirectional(outpts.view(-1, outpts.size(-1)), trgts_bidi.view(-1))
 
         # TODO fix perplexity for bidirectional training
         self.train_perplexity(outpts, trgts)
@@ -639,20 +690,17 @@ class LitMamba(L.LightningModule):
         # log and reset at end of step
         self.log("train_accuracy", self.train_accuracy.compute()*100.0, prog_bar=True)
         self.train_accuracy.reset()
+        self.log("train_accuracy_bidirectional", self.train_accuracy_bidirectional.compute()*100.0, prog_bar=True)
+        self.train_accuracy_bidirectional.reset()
         self.log("train_perplexity", self.train_perplexity.compute(), prog_bar=True)
         self.train_perplexity.reset()
 
     def validation_step(self, batch, batch_idx):
-        inpts, trgts = batch
+        inpts, trgts, trgts_bidi = batch
         outpts = self(inpts)
 
-        if self.bidirectional_training:
-            forward_len = (outpts.shape[1] - 2) // 2
-            outpts_tmp = outpts[:,-1*forward_len:]
-            trgts_tmp = trgts[:,-1*forward_len:]
-            self.val_accuracy(outpts_tmp.reshape(-1, outpts_tmp.size(-1)), trgts_tmp.reshape(-1))
-        else:
-            self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        self.val_accuracy(outpts.view(-1, outpts.size(-1)), trgts.view(-1))
+        self.val_accuracy_bidirectional(outpts.view(-1, outpts.size(-1)), trgts_bidi.view(-1))
 
         # TODO fix perplexity for bidirectional training
         self.val_perplexity(outpts, trgts)
@@ -661,6 +709,8 @@ class LitMamba(L.LightningModule):
         # log and reset at end of step
         self.log("val_accuracy", self.val_accuracy.compute()*100.0)
         self.val_accuracy.reset()
+        self.log("val_accuracy_bidirectional", self.val_accuracy_bidirectional.compute()*100.0)
+        self.val_accuracy_bidirectional.reset()
         self.log("val_perplexity", self.val_perplexity.compute())
         self.val_perplexity.reset()
 
@@ -688,7 +738,7 @@ def train(args):
 
     # training
     gpu_cnt = 1
-    max_epochs = 7500;
+    max_epochs = 7500
     limit_train_batches = 16
     limit_val_batches = 32
 
@@ -696,7 +746,7 @@ def train(args):
     batch_size_val = 64
 
     context_length = 1024
-    bidirectional = False
+    bidirectional = args.bidirectional
 
     # optimizer
     # TODO log lr & learning rate scheduler
@@ -748,6 +798,7 @@ if __name__ == '__main__':
     get_sp.set_defaults(func=GenomeDataset.get_yeast_data)
 
     train_sp = subparsers.add_parser("train", help="train model")
+    train_sp.add_argument("--bidirectional", action="store_true", help="run bidirectional training")
     train_sp.add_argument("--debug", action="store_true", help="tag this training run in logging with debugging tag")
     train_sp.set_defaults(func=train)
 
