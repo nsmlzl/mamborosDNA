@@ -250,16 +250,21 @@ class GenomeIterator:
                 uturn_char = torch.tensor([self.tokenizer.added_tokens_encoder["[UTURN]"]])
                 inpt = torch.cat([rev_masked_seq, uturn_char, masked_seq]).clone()
 
-                # create trgt tensor
+                # create trgt_bidirectional tensor; only forward part is not
+                # concealed with -100s. we only want to compute accuracy with
+                # forward part
                 trgt_front = torch.full((seq.shape[0]+1,), -100)
                 trgt_back = seq.clone()
                 trgt_back[~mask] = -100
-                trgt = torch.cat([trgt_front, trgt_back]).clone()
-                trgt_bidirectional = trgt
+                trgt_bidirectional = torch.cat([trgt_front, trgt_back]).clone()
+
+                # create trgt tensor; used for loss of training. let the model predict reverse, UTURN-char, and forward part
+                trgt = torch.cat([torch.flip(trgt_back, dims=[0]), uturn_char, trgt_back]).clone()
 
                 bidirectional_len = self.seq_len*2+1
                 assert inpt.numel() == bidirectional_len, "expected a bidirectional inpt tensor with {} elements; got {}".format(bidirectional_len, inpt.numel())
                 assert trgt.numel() == bidirectional_len, "expected a bidirectional trgt tensor with {} elements; got {}".format(bidirectional_len, trgt.numel())
+                assert trgt_bidirectional.numel() == bidirectional_len, "expected a bidirectional trgt_bidirectional tensor with {} elements; got {}".format(bidirectional_len, trgt_bidirectional.numel())
 
             break
 
